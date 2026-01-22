@@ -12,6 +12,13 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"penelope/config"
+	"penelope/controllers"
+	"penelope/db"
+	"penelope/middleware"
 )
 
 // =====================
@@ -36,18 +43,49 @@ import (
 // =====================
 
 func main() {
-	port := getenv("PORT", "8080")
+	// Config (mantém compatibilidade com env PORT)
+	cfg := config.Get(getenv("CONFIG_PATH", "config.json"))
+	port := getenv("PORT", cfg.ApiPort)
+	if os.Getenv("JWT_SECRET") == "" && cfg.Security.JwtSecret != "" {
+		_ = os.Setenv("JWT_SECRET", cfg.Security.JwtSecret)
+	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+	// DB
+	db.SetConfigurations(cfg)
+	database, err := db.Connect()
+	if err != nil {
+		log.Fatalf("db connect error: %v", err)
+	}
+	defer database.Close()
+
+	// Gin
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(middleware.CORSMiddleware())
+	r.Use(db.SetDBtoContext(database))
+
+	// Health
+	r.GET("/health", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
 	})
-	mux.HandleFunc("/webhook", webhookHandler)
 
+	// Webhook WhatsApp (mantém o handler legado)
+	r.Any("/webhook", func(c *gin.Context) {
+		webhookHandler(c.Writer, c.Request)
+	})
+
+	// API
+	api := r.Group("/api")
+	{
+		api.POST("/users", controllers.CreateUser)
+		api.POST("/user/activate/:code", controllers.ActivateUserByCode)
+		api.POST("/login", controllers.Login)
+	}
+
+	// HTTP server
 	srv := &http.Server{
 		Addr:              ":" + port,
-		Handler:           logRequests(mux),
+		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

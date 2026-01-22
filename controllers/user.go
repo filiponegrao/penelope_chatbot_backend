@@ -23,6 +23,10 @@ func CheckUserExists(c *gin.Context, email string) (bool, error, *models.User) {
 
 func CreateUser(c *gin.Context) {
 	db := dbpkg.DBInstance(c)
+	if db == nil {
+		RespondError(c, "db não configurado no contexto", 500)
+		return
+	}
 	user := models.User{}
 	if err := c.Bind(&user); err != nil {
 		RespondError(c, err.Error(), 400)
@@ -80,6 +84,9 @@ func CreateUser(c *gin.Context) {
 			RespondError(c, err.Error(), 400)
 			return
 		}
+		// Para testes iniciais (Bruno): devolve o código no payload.
+		// Em produção, isso normalmente iria por e-mail/SMS.
+		c.Set("activation_code", code)
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -89,5 +96,9 @@ func CreateUser(c *gin.Context) {
 	}
 
 	user.Password = ""
+	if v, ok := c.Get("activation_code"); ok {
+		RespondSuccess(c, gin.H{"user": user, "activation_code": v})
+		return
+	}
 	RespondSuccess(c, user)
 }

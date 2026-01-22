@@ -13,4 +13,8 @@ export PORT="${PORT:-8080}"
 export OPENAI_MODEL="${OPENAI_MODEL:-gpt-4.1-mini}"
 export POC_NO_WHATSAPP="${POC_NO_WHATSAPP:-true}"
 
+# >>> Novas envs do backend <<<
+export CONFIG_PATH="${CONFIG_PATH:-config.json}"
+export AUTOMIGRATE="${AUTOMIGRATE:-1}"
+
 go run .
