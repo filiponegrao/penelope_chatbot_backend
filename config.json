@@ -1,0 +1,11 @@
+{
+  "api_port": "8080",
+  "log_path": "logs/server.log",
+  "database": "postgresql",
+  "security": {
+    "jwt_secret": "PENELOPE_CHANGE_ME",
+    "activation_code_len": 6,
+    "refresh_code_len": 32,
+    "refresh_code_max_valid_days": 30
+  }
+}
