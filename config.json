@@ -1,7 +1,7 @@
 {
   "api_port": "8080",
   "log_path": "logs/server.log",
-  "database": "sqlite3",
+  "database": "sqlite",
   "security": {
     "jwt_secret": "PENELOPE_CHANGE_ME",
     "activation_code_len": 6,

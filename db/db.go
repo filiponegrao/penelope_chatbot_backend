@@ -56,6 +56,16 @@ func Connect() (*gorm.DB, error) {
 		db.AutoMigrate(
 			&models.User{},
 			&models.Invite{},
+			&models.RefreshToken{},
+			&models.PasswordReset{},
+			&models.Plan{},
+			&models.Module{},
+			&models.PlanModule{},
+			&models.Input{},
+			&models.ModuleInput{},
+			&models.UserInput{},
+			&models.Event{},
+			&models.UserPlan{},
 		)
 	}
 
