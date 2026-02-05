@@ -9,8 +9,8 @@ import (
 	"penelope/models"
 	"penelope/tools"
 
-	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/gorm"
+	"github.com/gin-gonic/gin"
 )
 
 type upsertWhatsAppConfigReq struct {
@@ -90,8 +90,8 @@ func UpsertWhatsAppConfig(c *gin.Context) {
 		Updates(map[string]any{
 			"phone_number_id": req.PhoneNumberID,
 			"access_token":    req.AccessToken,
-			"api_version":     req.ApiVersion,
-			"status":          status,
+			"api_version":      req.ApiVersion,
+			"status":           status,
 		}).Error; err != nil {
 		RespondError(c, err.Error(), http.StatusBadRequest)
 		return
@@ -187,8 +187,8 @@ func WhatsAppRegister(c *gin.Context) {
 	// mark as registered
 	now := time.Now()
 	_ = db.Model(&models.WhatsAppConfig{}).Where("id = ?", wa.ID).Updates(map[string]any{
-		"status":     models.WHATSAPP_STATUS_REGISTERED,
-		"updated_at": &now,
+		"status":      models.WHATSAPP_STATUS_REGISTERED,
+		"updated_at":  &now,
 	}).Error
 
 	RespondSuccess(c, true)

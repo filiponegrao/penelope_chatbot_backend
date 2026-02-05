@@ -175,6 +175,16 @@ log "Apache: preparando docroot vazio (pra / não cair no Apache default)..."
 mkdir -p /var/www/penelope/empty
 # Se você quiser que / retorne 404, remova a linha abaixo (não crie index.html)
 : > /var/www/penelope/empty/index.html
+
+# Páginas estáticas (Política de Privacidade e Termos de Serviço)
+TPL_DIR="${SCRIPT_DIR}/../templates"
+if [[ -f "${TPL_DIR}/policy.html" ]]; then
+  cp -f "${TPL_DIR}/policy.html" /var/www/penelope/empty/policy.html
+fi
+if [[ -f "${TPL_DIR}/terms.html" ]]; then
+  cp -f "${TPL_DIR}/terms.html" /var/www/penelope/empty/terms.html
+fi
+
 chown -R www-data:www-data /var/www/penelope
 
 log "Apache: habilitando módulos necessários (proxy, headers, rewrite, ssl)..."

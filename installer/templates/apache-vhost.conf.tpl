@@ -10,6 +10,14 @@
 
     ProxyPreserveHost On
 
+    # Páginas estáticas (HTML) servidas por URLs "*.pdf" por conveniência.
+    # Observação: o conteúdo entregue é HTML (não PDF).
+    Alias /policy.pdf /var/www/penelope/empty/policy.html
+    Alias /terms.pdf  /var/www/penelope/empty/terms.html
+    # Alternativas sem extensão
+    Alias /policy     /var/www/penelope/empty/policy.html
+    Alias /terms      /var/www/penelope/empty/terms.html
+
     # / -> não faz nada por enquanto (servindo um index.html vazio)
     # /api -> API (backend escuta em /)
     ProxyPass        /api  http://127.0.0.1:{{API_PORT}}/api retry=0
