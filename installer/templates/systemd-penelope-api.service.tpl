@@ -6,7 +6,7 @@ Wants=postgresql.service
 [Service]
 Type=simple
 User={{APP_USER}}
-Group={{APP_USER}}
+Group={{APP_GROUP}}
 WorkingDirectory={{API_DIR}}/src
 EnvironmentFile={{API_ENV}}
 
@@ -22,7 +22,7 @@ StandardError=append:/var/log/penelope/api.err.log
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/var/log/penelope
 
 [Install]

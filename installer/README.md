@@ -1,64 +1,41 @@
 # Instalador Penélope Chatbot (Apache + Postgres + Go)
 
-Este diretório é **pra você manter localmente** e rodar sempre que quiser subir uma máquina nova.
-Ele faz:
+Este repositório contém o instalador **dentro do próprio backend**, em `installer/`.
 
-- Instala: Go (versão fixa), PostgreSQL, Apache2, Certbot
-- Configura Postgres: cria DB + user + senha
-- Configura Apache: VirtualHost `DOMINIO.conf` com proxy:
-  - `/api` -> `127.0.0.1:5000`
-  - `/admin` -> `127.0.0.1:8888` (placeholder por enquanto)
-- Configura systemd:
-  - `penelope-api.service` (no primeiro boot roda `go run .`, depois o deploy troca para binário)
-  - `penelope-admin.service` (placeholder python http server)
-- Deploy: clona/builda o repo `filiponegrao/penelope_chatbot_backend` e sobe o serviço.
+## Objetivo: 1 arquivo de configuração (JSON) como fonte única
 
-## Como rodar
+Você mantém **um único arquivo sensível** `config.json` **localmente** (fora do git).
+O `run.sh` **local** copia esse JSON para o servidor em:
 
-1) Ajuste o DNS na DigitalOcean:
-- A record do `vendittoapp.com` (e/ou `api.vendittoapp.com` se preferir) apontando para o IP do servidor.
+- `/etc/penelope/config.json` (root:root, 600)
 
-2) Execute:
+Depois disso, o instalador no servidor (`installer/install.sh`) lê esse JSON e:
 
-```bash
-chmod +x penelope-up.sh
-./penelope-up.sh --host SEU_IP --domain vendittoapp.com --email admin@vendittoapp.com
-```
+- gera `/etc/penelope/runtime.config.json` (no formato que o backend Go já entende)
+- gera `/etc/penelope/api.env` automaticamente (o backend continua lendo `.env`, mas você **não edita**)
+- roda bootstrap (dependências, postgres, apache, systemd)
+- roda deploy (clone/build/restart)
+- roda certbot (opcional)
 
-### Se o clone pedir credenciais
-
-Opção A (mais simples): Personal Access Token
+## Rodando no servidor (manual)
 
 ```bash
-export GITHUB_TOKEN="ghp_..."
-./penelope-up.sh --host SEU_IP --domain vendittoapp.com --email admin@vendittoapp.com
+sudo bash installer/install.sh --config /etc/penelope/config.json --all
 ```
 
-Opção B: Deploy key (base64)
+## Arquivos no servidor
 
-```bash
-export GIT_SSH_KEY_B64="$(base64 -w0 ~/.ssh/id_ed25519)"
-./penelope-up.sh --host SEU_IP --domain vendittoapp.com --email admin@vendittoapp.com
-```
-
-## Onde ficam as configs no servidor
-
-- Env do runtime: `/etc/penelope/api.env`
-- Config do backend: `/etc/penelope/config.json`
-- Código: `/opt/penelope/api/src`
+- Config única (sensível): `/etc/penelope/config.json`
+- Config gerada (sensível): `/etc/penelope/runtime.config.json`
+- Env gerado (sensível): `/etc/penelope/api.env`
+- Código (clonado pelo deploy): `/opt/penelope/api/src`
 - Binário: `/opt/penelope/api/bin/penelope-api`
 - Logs:
   - `/var/log/penelope/api.out.log`
   - `/var/log/penelope/api.err.log`
 
-## Observação importante (paths)
+## Observações de segurança
 
-Seu backend hoje expõe rotas em `/api/...` (via group "/api" no router).
-O Apache está proxyando `/api` para `http://127.0.0.1:5000/api` (mantendo o prefixo).
-
-## Admin
-
-Por enquanto o `/admin` é placeholder (python http server).
-Quando você criar o admin real (provavelmente outro binário / outro repo),
-a única coisa que muda é o `penelope-admin.service` e o target do ProxyPass.
-
+- Não coloque o `config.json` em pastas servidas pela web.
+- Evite `set -x` nos scripts para não vazar secrets em logs.
+- Os arquivos em `/etc/penelope` são criados com permissão root-only.

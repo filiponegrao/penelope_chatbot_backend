@@ -9,6 +9,7 @@ REPO_HTTPS="${REPO_HTTPS:-https://github.com/filiponegrao/penelope_chatbot_backe
 BRANCH="${BRANCH:-main}"
 
 APP_USER="${APP_USER:-penelope}"
+APP_GROUP="${APP_GROUP:-root}"
 APP_HOME="${APP_HOME:-/opt/penelope}"
 API_DIR="${API_DIR:-${APP_HOME}/api}"
 SRC_DIR="${API_DIR}/src"
@@ -19,7 +20,7 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"  # opcional (para clone via HTTPS sem prompt)
 GIT_SSH_KEY_B64="${GIT_SSH_KEY_B64:-}"  # opcional (base64 de uma key privada com acesso ao repo)
 
 mkdir -p "${SRC_DIR}" "${BIN_DIR}"
-chown -R "${APP_USER}:${APP_USER}" "${API_DIR}"
+chown -R "${APP_USER}:${APP_GROUP}" "${API_DIR}"
 
 log "Preparando método de clone (ssh key b64 / token https / ssh normal)..."
 GIT_CMD=(git)
@@ -29,29 +30,36 @@ if [[ -n "${GIT_SSH_KEY_B64}" ]]; then
   mkdir -p "${SSH_DIR}"
   echo "${GIT_SSH_KEY_B64}" | base64 -d > "${SSH_DIR}/id_deploy"
   chmod 600 "${SSH_DIR}/id_deploy"
-  chown -R "${APP_USER}:${APP_USER}" "${SSH_DIR}"
+  chown -R "${APP_USER}:${APP_GROUP}" "${SSH_DIR}"
   # shellcheck disable=SC2016
   export GIT_SSH_COMMAND="ssh -i ${SSH_DIR}/id_deploy -o StrictHostKeyChecking=accept-new"
 elif [[ -n "${GITHUB_TOKEN}" ]]; then
   log "Usando GITHUB_TOKEN para clone via HTTPS (sem prompt)..."
   REPO_URL="https://${GITHUB_TOKEN}@github.com/filiponegrao/penelope_chatbot_backend.git"
 else
-  REPO_URL="${REPO_SSH}"
+  # Default em HTTPS evita dor com known_hosts / SSH
+  REPO_URL="${REPO_HTTPS}"
 fi
+
 
 log "Clonando/atualizando repo em ${SRC_DIR}..."
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
-  sudo -u "${APP_USER}" bash -lc "git clone '${REPO_URL}' '${SRC_DIR}'"
+  sudo -H -u "${APP_USER}" bash -lc "git clone '${REPO_URL}' '${SRC_DIR}'"
 fi
 
 pushd "${SRC_DIR}" >/dev/null
-sudo -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git fetch --prune"
-sudo -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git checkout '${BRANCH}'"
-sudo -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git pull --ff-only origin '${BRANCH}'"
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git fetch origin '${BRANCH}' --prune"
+# Deploy deve refletir exatamente o remoto (inclusive após force-push).
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && (git checkout '${BRANCH}' 2>/dev/null || git checkout -b '${BRANCH}' 'origin/${BRANCH}')"
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git reset --hard 'origin/${BRANCH}'"
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && git clean -fd"
 
 log "Buildando binário..."
-sudo -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && /usr/local/go/bin/go mod tidy"
-sudo -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && /usr/local/go/bin/go build -o '${API_BIN}' ."
+export GOTOOLCHAIN=local
+export GOMAXPROCS="${GOMAXPROCS:-1}"
+
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && /usr/local/go/bin/go mod tidy"
+sudo -H -u "${APP_USER}" bash -lc "cd '${SRC_DIR}' && /usr/local/go/bin/go build -p 1 -o '${API_BIN}' ."
 
 log "Atualizando ExecStart do systemd (para rodar binário em vez de go run)..."
 # Ajusta o service para ExecStart apontar para o binário.

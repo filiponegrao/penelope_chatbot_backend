@@ -1,19 +1,23 @@
 <VirtualHost *:80>
     ServerName {{DOMAIN}}
+    DocumentRoot /var/www/penelope/empty
 
-    # Proxy settings
+    <Directory "/var/www/penelope/empty">
+        Require all granted
+        Options -Indexes
+        AllowOverride None
+    </Directory>
+
     ProxyPreserveHost On
-    RequestHeader set X-Forwarded-Proto "http"
-    RequestHeader set X-Forwarded-Port "80"
 
-    # /api -> Go backend em localhost:{{API_PORT}}
-    ProxyPass        "/api"  "http://127.0.0.1:{{API_PORT}}/api" retry=0
-    ProxyPassReverse "/api"  "http://127.0.0.1:{{API_PORT}}/api"
+    # / -> não faz nada por enquanto (servindo um index.html vazio)
+    # /api -> API (backend escuta em /)
+    ProxyPass        /api  http://127.0.0.1:{{API_PORT}}/api retry=0
+    ProxyPassReverse /api  http://127.0.0.1:{{API_PORT}}/api
 
-    # /admin -> admin em localhost:{{ADMIN_PORT}}
-    ProxyPass        "/admin"  "http://127.0.0.1:{{ADMIN_PORT}}/" retry=0
-    ProxyPassReverse "/admin"  "http://127.0.0.1:{{ADMIN_PORT}}/"
-
-    ErrorLog  /var/log/apache2/{{DOMAIN}}-error.log
-    CustomLog /var/log/apache2/{{DOMAIN}}-access.log combined
+    # Redireciona tudo pra HTTPS (exceto ACME challenge do certbot)
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteCond %{HTTPS} !=on
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 </VirtualHost>

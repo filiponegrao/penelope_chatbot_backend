@@ -2,129 +2,261 @@
 set -euo pipefail
 
 # installer/install.sh
-# Orquestrador NO SERVIDOR, rodado dentro do repo clonado.
-# Lê um JSON de config (opcional) e executa:
-#   - remote/00-bootstrap.sh
-#   - remote/01-deploy-api.sh
-#   - remote/02-certbot.sh
+# Rodado NO SERVIDOR, dentro do repo clonado.
+#
+# Fonte única: /etc/penelope/config.json (copiado pelo run.sh LOCAL).
+# A partir dele, este script:
+#   1) valida o JSON
+#   2) gera:
+#        - /etc/penelope/runtime.config.json   (config no formato esperado pelo backend Go)
+#        - /etc/penelope/api.env               (EnvironmentFile do systemd; o usuário não edita)
+#   3) executa:
+#        - installer/remote/00-bootstrap.sh
+#        - installer/remote/01-deploy-api.sh
+#        - installer/remote/02-certbot.sh
 #
 # Uso:
-#   sudo bash installer/install.sh --config /etc/penelope/installer.json
-#   sudo bash installer/install.sh --all
-#   sudo bash installer/install.sh --bootstrap
-#   sudo bash installer/install.sh --deploy
-#   sudo bash installer/install.sh --certbot
+#   sudo bash installer/install.sh --config /etc/penelope/config.json --all
 #
-# Vars podem vir do JSON ou do ambiente.
+# Flags:
+#   --bootstrap | --deploy | --certbot | --all
+#   --skip-certbot
+#   --config <path>
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REMOTE_DIR="${SCRIPT_DIR}/remote"
-
 # shellcheck source=remote/lib.sh
 source "${REMOTE_DIR}/lib.sh"
 
 require_root
 
-CONFIG_PATH=""
+CONFIG_PATH="/etc/penelope/config.json"
 DO_BOOTSTRAP=0
 DO_DEPLOY=0
 DO_CERTBOT=0
 SKIP_CERTBOT=0
 
-usage() {
-  sed -n '1,120p' "$0"
-}
+usage() { sed -n '1,200p' "$0"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG_PATH="${2:-}"; shift 2;;
-    --all) DO_BOOTSTRAP=1; DO_DEPLOY=1; DO_CERTBOT=1; shift;;
     --bootstrap) DO_BOOTSTRAP=1; shift;;
     --deploy) DO_DEPLOY=1; shift;;
     --certbot) DO_CERTBOT=1; shift;;
+    --all) DO_BOOTSTRAP=1; DO_DEPLOY=1; DO_CERTBOT=1; shift;;
     --skip-certbot) SKIP_CERTBOT=1; shift;;
     -h|--help) usage; exit 0;;
     *) die "Argumento desconhecido: $1";;
   esac
 done
 
-# Default: tudo
 if [[ $DO_BOOTSTRAP -eq 0 && $DO_DEPLOY -eq 0 && $DO_CERTBOT -eq 0 ]]; then
-  DO_BOOTSTRAP=1
-  DO_DEPLOY=1
-  DO_CERTBOT=1
+  DO_BOOTSTRAP=1; DO_DEPLOY=1; DO_CERTBOT=1
 fi
 
-# Helpers JSON
-json_get() {
-  local jq_expr="$1"
-  if [[ -n "${CONFIG_PATH}" && -f "${CONFIG_PATH}" ]]; then
-    jq -r "${jq_expr} // empty" "${CONFIG_PATH}" 2>/dev/null || true
-  else
-    echo ""
-  fi
+[[ -f "${CONFIG_PATH}" ]] || die "Config JSON não encontrado em ${CONFIG_PATH}. Copie pelo run.sh local."
+
+if ! command -v jq >/dev/null 2>&1; then
+  # Máquina virgem: precisamos do jq para ler o JSON antes do bootstrap.
+  apt-get update -y >/dev/null
+  apt-get install -y jq >/dev/null
+fi
+
+# jq helpers
+jget() { jq -r "$1 // empty" "${CONFIG_PATH}" 2>/dev/null || true; }
+jget_num() { jq -r "$1 // empty" "${CONFIG_PATH}" 2>/dev/null | tr -d '[:space:]' || true; }
+
+# escape for systemd EnvironmentFile: KEY="value"
+env_escape() {
+  local s="${1:-}"
+  s="${s//\\/\\\\}"      # backslash
+  s="${s//\"/\\\"}"      # double quote
+  s="${s//$'\r'/}"       # CR
+  s="${s//$'\n'/\\n}"    # NL -> \n
+  printf '%s' "${s}"
 }
 
 # =========================
-# Carrega config (JSON ou env)
+# Read JSON (installer)
 # =========================
-DOMAIN="${DOMAIN:-$(json_get '.installer.domain')}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-$(json_get '.installer.admin_email')}"
-BRANCH="${BRANCH:-$(json_get '.installer.branch')}"
-GO_VERSION="${GO_VERSION:-$(json_get '.installer.go_version')}"
+DOMAIN="$(jget '.installer.domain')"
+ADMIN_EMAIL="$(jget '.installer.admin_email')"
+BRANCH="$(jget '.installer.branch')"
+GO_VERSION="$(jget '.installer.go_version')"
+REPO_SSH="$(jget '.installer.repo_ssh')"
+REPO_HTTPS="$(jget '.installer.repo_https')"
 
-DB_NAME="${DB_NAME:-$(json_get '.db.name')}"
-DB_USER="${DB_USER:-$(json_get '.db.user')}"
-DB_PASS="${DB_PASS:-$(json_get '.db.pass')}"
+# =========================
+# DB (for Postgres + runtime.config.json)
+# =========================
+DATABASE="$(jget '.db.database')"   # "postgres" | "sqlite3"
+DB_HOST="$(jget '.db.host')"
+DB_PORT="$(jget '.db.port')"
+DB_NAME="$(jget '.db.name')"
+DB_USER="$(jget '.db.user')"
+DB_PASS="$(jget '.db.pass')"
 
-# credenciais de clone (opcionais)
-GITHUB_TOKEN="${GITHUB_TOKEN:-$(json_get '.git.github_token')}"
-GIT_SSH_KEY_B64="${GIT_SSH_KEY_B64:-$(json_get '.git.ssh_key_b64')}"
+# =========================
+# Runtime (env)
+# =========================
+PORT="$(jget '.runtime.port')"
+AUTOMIGRATE="$(jget '.runtime.automigrate')"
 
-# Defaults seguros
+WHATSAPP_VERIFY_TOKEN="$(jget '.runtime.whatsapp.verify_token')"
+WHATSAPP_PHONE_NUMBER_ID="$(jget '.runtime.whatsapp.phone_number_id')"
+WHATSAPP_ACCESS_TOKEN="$(jget '.runtime.whatsapp.access_token')"
+
+OPENAI_API_KEY="$(jget '.runtime.openai.api_key')"
+OPENAI_MODEL="$(jget '.runtime.openai.model')"
+OPENAI_SYSTEM_PROMPT="$(jget '.runtime.openai.system_prompt')"
+
+JWT_SECRET="$(jget '.runtime.security.jwt_secret')"
+ACTIVATION_CODE_LEN="$(jget_num '.runtime.security.activation_code_len')"
+REFRESH_CODE_LEN="$(jget_num '.runtime.security.refresh_code_len')"
+REFRESH_MAX_DAYS="$(jget_num '.runtime.security.refresh_code_max_valid_days')"
+
+# Defaults (non-sensitive)
 DOMAIN="${DOMAIN:-vendittoapp.com}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@vendittoapp.com}"
 BRANCH="${BRANCH:-main}"
-GO_VERSION="${GO_VERSION:-1.22.5}"
+GO_VERSION="${GO_VERSION:-1.23.0}"
+REPO_SSH="${REPO_SSH:-git@github.com:filiponegrao/penelope_chatbot_backend.git}"
+REPO_HTTPS="${REPO_HTTPS:-https://github.com/filiponegrao/penelope_chatbot_backend.git}"
+
+DATABASE="${DATABASE:-postgres}"
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-penelope}"
 DB_USER="${DB_USER:-penelope}"
 
-# Se DB_PASS não veio, tenta reaproveitar /etc/penelope/db.pass, senão gera
-DB_PASS_FILE="/etc/penelope/db.pass"
-if [[ -z "${DB_PASS}" ]]; then
-  if [[ -f "${DB_PASS_FILE}" ]]; then
-    DB_PASS="$(cat "${DB_PASS_FILE}")"
-  else
-    DB_PASS="$(random_password)"
-    umask 077
-    mkdir -p /etc/penelope
-    echo -n "${DB_PASS}" > "${DB_PASS_FILE}"
-    chmod 600 "${DB_PASS_FILE}"
-  fi
+PORT="${PORT:-5000}"
+AUTOMIGRATE="${AUTOMIGRATE:-1}"
+OPENAI_MODEL="${OPENAI_MODEL:-gpt-4.1-mini}"
+ACTIVATION_CODE_LEN="${ACTIVATION_CODE_LEN:-6}"
+REFRESH_CODE_LEN="${REFRESH_CODE_LEN:-32}"
+REFRESH_MAX_DAYS="${REFRESH_MAX_DAYS:-30}"
+
+# Required (sensitive)
+[[ -n "${DB_PASS}" ]] || die "Campo obrigatório ausente: .db.pass (no JSON)"
+[[ -n "${JWT_SECRET}" ]] || die "Campo obrigatório ausente: .runtime.security.jwt_secret (no JSON)"
+[[ -n "${WHATSAPP_VERIFY_TOKEN}" ]] || die "Campo obrigatório ausente: .runtime.whatsapp.verify_token (no JSON)"
+[[ -n "${WHATSAPP_PHONE_NUMBER_ID}" ]] || die "Campo obrigatório ausente: .runtime.whatsapp.phone_number_id (no JSON)"
+[[ -n "${WHATSAPP_ACCESS_TOKEN}" ]] || die "Campo obrigatório ausente: .runtime.whatsapp.access_token (no JSON)"
+[[ -n "${OPENAI_API_KEY}" ]] || die "Campo obrigatório ausente: .runtime.openai.api_key (no JSON)"
+
+# =========================
+# Generate files in /etc/penelope
+# =========================
+ENV_DIR="/etc/penelope"
+API_ENV="${ENV_DIR}/api.env"
+RUNTIME_CONFIG="${ENV_DIR}/runtime.config.json"
+
+APP_USER="${APP_USER:-penelope}"
+APP_GROUP="${APP_GROUP:-root}"   # sem grupo "penelope"
+
+# Garante usuário do serviço sem criar grupo novo (usa grupo root)
+if ! id -u "${APP_USER}" >/dev/null 2>&1; then
+  useradd --system \
+    --create-home --home-dir "/home/${APP_USER}" \
+    --shell /usr/sbin/nologin \
+    --gid "${APP_GROUP}" \
+    "${APP_USER}"
 fi
 
-log "Repo: ${REPO_DIR}"
-log "Config: ${CONFIG_PATH:-<sem JSON>}"
-log "Domain: ${DOMAIN}"
-log "Branch: ${BRANCH}"
-log "Go: ${GO_VERSION}"
-log "DB: ${DB_NAME} / ${DB_USER} (pass: ${DB_PASS_FILE})"
+umask 077
+mkdir -p "${ENV_DIR}"
+
+# Diretório precisa ser acessível pelo usuário do serviço para ler o runtime.config.json
+chown "${APP_USER}:${APP_GROUP}" "${ENV_DIR}"
+chmod 750 "${ENV_DIR}"
+
+# 1) runtime.config.json (use jq -n for proper JSON escaping)
+jq -n \
+  --arg api_port "${PORT}" \
+  --arg log_path "/var/log/penelope/api.log" \
+  --arg database "${DATABASE}" \
+  --arg db_host "${DB_HOST}" \
+  --arg db_port "${DB_PORT}" \
+  --arg db_user "${DB_USER}" \
+  --arg db_name "${DB_NAME}" \
+  --arg db_pass "${DB_PASS}" \
+  --arg jwt_secret "${JWT_SECRET}" \
+  --argjson activation_code_len "${ACTIVATION_CODE_LEN}" \
+  --argjson refresh_code_len "${REFRESH_CODE_LEN}" \
+  --argjson refresh_code_max_valid_days "${REFRESH_MAX_DAYS}" \
+  '{
+    api_port: $api_port,
+    log_path: $log_path,
+    database: $database,
+    db_host: $db_host,
+    db_port: $db_port,
+    db_user: $db_user,
+    db_name: $db_name,
+    db_pass: $db_pass,
+    security: {
+      jwt_secret: $jwt_secret,
+      activation_code_len: $activation_code_len,
+      refresh_code_len: $refresh_code_len,
+      refresh_code_max_valid_days: $refresh_code_max_valid_days
+    }
+  }' > "${RUNTIME_CONFIG}"
+
+chown "${APP_USER}:${APP_GROUP}" "${RUNTIME_CONFIG}"
+chmod 640 "${RUNTIME_CONFIG}"
+
+# 2) api.env for systemd EnvironmentFile (quote values)
+{
+  echo "# Gerado automaticamente por installer/install.sh"
+  echo "PORT=\"$(env_escape "${PORT}")\""
+  echo "CONFIG_PATH=\"$(env_escape "${RUNTIME_CONFIG}")\""
+  echo "AUTOMIGRATE=\"$(env_escape "${AUTOMIGRATE}")\""
+  echo ""
+  echo "# WhatsApp Cloud API"
+  # IMPORTANTE:
+  # - O endpoint de validação do webhook usa WEBHOOK_VERIFY_TOKEN.
+  # - Mantemos WHATSAPP_VERIFY_TOKEN por compatibilidade/legibilidade.
+  echo "WEBHOOK_VERIFY_TOKEN=\"$(env_escape "${WHATSAPP_VERIFY_TOKEN}")\""
+  echo "WHATSAPP_VERIFY_TOKEN=\"$(env_escape "${WHATSAPP_VERIFY_TOKEN}")\""
+  echo "WHATSAPP_PHONE_NUMBER_ID=\"$(env_escape "${WHATSAPP_PHONE_NUMBER_ID}")\""
+  echo "WHATSAPP_ACCESS_TOKEN=\"$(env_escape "${WHATSAPP_ACCESS_TOKEN}")\""
+  echo ""
+  echo "# OpenAI"
+  echo "OPENAI_API_KEY=\"$(env_escape "${OPENAI_API_KEY}")\""
+  echo "OPENAI_MODEL=\"$(env_escape "${OPENAI_MODEL}")\""
+  echo "OPENAI_SYSTEM_PROMPT=\"$(env_escape "${OPENAI_SYSTEM_PROMPT}")\""
+  echo ""
+  echo "# Segurança"
+  echo "JWT_SECRET=\"$(env_escape "${JWT_SECRET}")\""
+} > "${API_ENV}"
+
+# api.env deve ser root-only porque contém secrets
+chown root:root "${API_ENV}"
+chmod 600 "${API_ENV}"
+
+log "Config carregada de: ${CONFIG_PATH}"
+log "Gerados:"
+log "  - ${RUNTIME_CONFIG} (lido pelo serviço: ${APP_USER})"
+log "  - ${API_ENV} (root-only)"
+log "Domain: ${DOMAIN} | Branch: ${BRANCH} | Go: ${GO_VERSION} | DB: ${DB_NAME}/${DB_USER}"
+log "Obs: secrets não são logados."
 
 # =========================
-# Executa etapas
+# Execute steps
 # =========================
 if [[ $DO_BOOTSTRAP -eq 1 ]]; then
-  log ">> Rodando bootstrap..."
+  log ">> Bootstrap..."
   DOMAIN="${DOMAIN}" ADMIN_EMAIL="${ADMIN_EMAIL}" GO_VERSION="${GO_VERSION}" \
   DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASS="${DB_PASS}" \
+  API_PORT="${PORT}" \
+  APP_USER="${APP_USER}" APP_GROUP="${APP_GROUP}" \
   bash "${REMOTE_DIR}/00-bootstrap.sh"
 fi
 
 if [[ $DO_DEPLOY -eq 1 ]]; then
-  log ">> Rodando deploy..."
-  DOMAIN="${DOMAIN}" BRANCH="${BRANCH}" \
-  GITHUB_TOKEN="${GITHUB_TOKEN}" GIT_SSH_KEY_B64="${GIT_SSH_KEY_B64}" \
+  log ">> Deploy..."
+  DOMAIN="${DOMAIN}" BRANCH="${BRANCH}" REPO_SSH="${REPO_SSH}" REPO_HTTPS="${REPO_HTTPS}" \
+  APP_USER="${APP_USER}" APP_GROUP="${APP_GROUP}" \
   bash "${REMOTE_DIR}/01-deploy-api.sh"
 fi
 
@@ -132,8 +264,9 @@ if [[ $DO_CERTBOT -eq 1 ]]; then
   if [[ $SKIP_CERTBOT -eq 1 ]]; then
     log ">> Pulando certbot (--skip-certbot)."
   else
-    log ">> Rodando certbot..."
+    log ">> Certbot..."
     DOMAIN="${DOMAIN}" ADMIN_EMAIL="${ADMIN_EMAIL}" \
+    APP_USER="${APP_USER}" APP_GROUP="${APP_GROUP}" \
     bash "${REMOTE_DIR}/02-certbot.sh"
   fi
 fi

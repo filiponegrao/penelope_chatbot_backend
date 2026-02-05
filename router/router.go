@@ -73,6 +73,11 @@ func Initialize(r *gin.Engine, cfg config.Configuration) {
 	validated.GET("/events/dashboard/monthly-usage", Logger(), controllers.GetEventsMonthlyUsage)
 	validated.GET("/events/dashboard/list", Logger(), controllers.GetEventsDashboardList)
 
+	// WhatsApp (client) - configure + register number
+	validated.PUT("/whatsapp/config", Logger(), controllers.UpsertWhatsAppConfig)
+	validated.POST("/whatsapp/request-code", Logger(), controllers.WhatsAppRequestCode)
+	validated.POST("/whatsapp/register", Logger(), controllers.WhatsAppRegister)
+
 	// Admin routes
 	admin := validated.Group("")
 	admin.Use(Adminizer())

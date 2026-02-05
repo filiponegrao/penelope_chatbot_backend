@@ -81,7 +81,23 @@ func handleEvent(db *gorm.DB, eventID int64) {
 	}
 
 	if err := tools.SendWhatsAppText(ctx, ev.Recipient, replyText); err != nil {
-		log.Printf("events worker: send whatsapp error: %v", err)
+		log.Printf("events worker: send whatsapp error (legacy env): %v", err)
+	}
+
+	// Multi-tenant send (preferred): uses WhatsAppConfig for ev.UserID.
+	// If config is missing, we keep legacy env behavior above to avoid breaking older setups.
+	if db != nil {
+		var wa models.WhatsAppConfig
+		if err := db.Where("user_id = ?", ev.UserID).First(&wa).Error; err == nil {
+			waClient := tools.WhatsAppClient{
+				AccessToken:   wa.AccessToken,
+				ApiVersion:    wa.ApiVersion,
+				PhoneNumberID: wa.PhoneNumberID,
+			}
+			if err := waClient.SendText(ctx, ev.Recipient, replyText); err != nil {
+				log.Printf("events worker: send whatsapp error (tenant): %v", err)
+			}
+		}
 	}
 
 	t := time.Now()

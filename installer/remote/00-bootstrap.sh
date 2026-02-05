@@ -10,6 +10,7 @@ DOMAIN="${DOMAIN:-vendittoapp.com}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@vendittoapp.com}"
 
 APP_USER="${APP_USER:-penelope}"
+APP_GROUP="${APP_GROUP:-root}"   # grupo root, sem grupo "penelope"
 APP_HOME="${APP_HOME:-/opt/penelope}"
 API_DIR="${API_DIR:-${APP_HOME}/api}"
 ADMIN_DIR="${ADMIN_DIR:-${APP_HOME}/admin}"
@@ -32,8 +33,79 @@ apt_install ca-certificates curl gnupg lsb-release git unzip jq \
   certbot python3-certbot-apache \
   build-essential
 
+
+ensure_swap() {
+  local swaps mem_mb free_mb desired_mb size_mb swap_file
+
+  swaps="$(swapon --show --noheadings 2>/dev/null | wc -l | tr -d '[:space:]')"
+  if [[ "${swaps}" != "0" ]]; then
+    log "Swap: já existe swap ativa. OK."
+    return 0
+  fi
+
+  mem_mb="$(awk '/MemTotal/ {printf("%d", $2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [[ "${mem_mb}" -gt 2048 ]]; then
+    log "Swap: RAM=${mem_mb}MB (>2048MB). Pulando criação de swap."
+    return 0
+  fi
+
+  free_mb="$(df -Pm / | awk 'NR==2 {print $4}' 2>/dev/null || echo 0)"
+
+  desired_mb=$(( mem_mb * 2 ))
+  if [[ "${desired_mb}" -lt 2048 ]]; then desired_mb=2048; fi
+  if [[ "${desired_mb}" -gt 4096 ]]; then desired_mb=4096; fi
+
+  size_mb="${desired_mb}"
+
+  if [[ "${free_mb}" -le 2048 ]]; then
+    log "Swap: pouco espaço em disco (free=${free_mb}MB). Pulando criação de swap."
+    return 0
+  fi
+
+  local max_by_disk=$(( free_mb - 1024 ))
+  if [[ "${size_mb}" -gt "${max_by_disk}" ]]; then
+    size_mb="${max_by_disk}"
+  fi
+
+  if [[ "${size_mb}" -lt 512 ]]; then
+    log "Swap: size calculado muito pequeno (${size_mb}MB). Pulando."
+    return 0
+  fi
+
+  swap_file="/swapfile"
+
+  if [[ -f "${swap_file}" ]]; then
+    log "Swap: /swapfile já existe. Tentando ativar..."
+    chmod 600 "${swap_file}" || true
+    mkswap "${swap_file}" >/dev/null 2>&1 || true
+    swapon "${swap_file}" >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  log "Criando swapfile (${size_mb}MB) para suportar build em máquina pequena..."
+  if command -v fallocate >/dev/null 2>&1; then
+    fallocate -l "${size_mb}M" "${swap_file}" 2>/dev/null || true
+  fi
+  if [[ ! -s "${swap_file}" ]]; then
+    dd if=/dev/zero of="${swap_file}" bs=1M count="${size_mb}" status=none
+  fi
+
+  chmod 600 "${swap_file}"
+  mkswap "${swap_file}" >/dev/null
+  swapon "${swap_file}"
+
+  grep -q "^${swap_file} " /etc/fstab || echo "${swap_file} none swap sw 0 0" >> /etc/fstab
+  sysctl -w vm.swappiness=10 >/dev/null || true
+
+  log "Swap criada e ativada. Estado atual:"
+  free -h || true
+}
+
+# 🔴 chamada obrigatória
+ensure_swap
+
 log "Instalando Go (fixo) a partir do tarball oficial..."
-GO_VERSION="${GO_VERSION:-1.22.5}"
+GO_VERSION="${GO_VERSION:-1.23.0}"
 ARCH="$(detect_arch)"
 GO_TGZ="go${GO_VERSION}.linux-${ARCH}.tar.gz"
 GO_URL="https://go.dev/dl/${GO_TGZ}"
@@ -53,11 +125,20 @@ export PATH="/usr/local/go/bin:$PATH"
 go version
 
 log "Criando usuário e pastas..."
-id -u "${APP_USER}" >/dev/null 2>&1 || useradd --system --home "${APP_HOME}" --shell /usr/sbin/nologin "${APP_USER}"
+if ! id -u "${APP_USER}" >/dev/null 2>&1; then
+  useradd --system \
+    --create-home --home-dir "${APP_HOME}" \
+    --shell /usr/sbin/nologin \
+    --gid "${APP_GROUP}" \
+    "${APP_USER}"
+fi
+
 mkdir -p "${APP_HOME}" "${API_DIR}" "${ADMIN_DIR}" /var/log/penelope "${ENV_DIR}"
-chown -R "${APP_USER}:${APP_USER}" "${APP_HOME}" /var/log/penelope
+chown -R "${APP_USER}:${APP_GROUP}" "${APP_HOME}" /var/log/penelope
+
 chmod 750 /var/log/penelope
 chmod 750 "${ENV_DIR}"
+chown "${APP_USER}:${APP_GROUP}" "${ENV_DIR}"
 
 log "Configurando PostgreSQL (db/user)..."
 
@@ -65,7 +146,7 @@ systemctl restart postgresql
 pg_isready || die "Postgres não está pronto."
 
 if [[ -z "${DB_PASS}" ]]; then
-  die "DB_PASS obrigatório (modo all-in). Ex: export DB_PASS='...' ou passar via env no penelope-up.sh"
+  die "DB_PASS obrigatório."
 fi
 
 export PSQLRC=/dev/null
@@ -85,75 +166,25 @@ EOF
 log "Checando database..."
 DB_EXISTS="$(sudo -u postgres psql -X -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" || true | tr -d '[:space:]')"
 if [[ "${DB_EXISTS}" != "1" ]]; then
-  log "Database não existe. Criando..."
-  sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
-else
-  log "Database já existe. OK."
-fi
-
-log "Garantindo privilégios..."
-sudo -u postgres psql -X -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
-
-log "Postgres OK."
-
-log "Criando database se não existir..."
-if ! sudo -u postgres psql -X -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
   sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
 fi
 
-log "Garantindo privilégios..."
 sudo -u postgres psql -X -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
 
-log "Criando env/config em /etc/penelope (não sobrescreve se já existir)..."
-if [[ ! -f "${API_ENV}" ]]; then
-  cat > "${API_ENV}" <<EOF
-# Penelope API runtime env
-PORT=${API_PORT}
-CONFIG_PATH=${API_CONFIG}
-AUTOMIGRATE=1
-
-# WhatsApp
-WHATSAPP_VERIFY_TOKEN=CHANGEME
-WHATSAPP_PHONE_NUMBER_ID=CHANGEME
-WHATSAPP_ACCESS_TOKEN=CHANGEME
-
-# OpenAI
-OPENAI_API_KEY=CHANGEME
-OPENAI_MODEL=gpt-4.1-mini
-
-# Segurança
-JWT_SECRET=CHANGEME
-EOF
-  chown root:"${APP_USER}" "${API_ENV}"
-  chmod 640 "${API_ENV}"
-fi
-
-if [[ ! -f "${API_CONFIG}" ]]; then
-  cat > "${API_CONFIG}" <<EOF
-{
-  "api_port": "${API_PORT}",
-  "log_path": "/var/log/penelope/api.log",
-  "database": "postgres",
-  "db_host": "127.0.0.1",
-  "db_port": "5432",
-  "db_user": "${DB_USER}",
-  "db_name": "${DB_NAME}",
-  "db_pass": "${DB_PASS}",
-  "security": {
-    "jwt_secret": "CHANGE_ME",
-    "activation_code_len": 6,
-    "refresh_code_len": 32,
-    "refresh_code_max_valid_days": 30
-  }
-}
-EOF
-  chown root:"${APP_USER}" "${API_CONFIG}"
-  chmod 640 "${API_CONFIG}"
-fi
+log "Apache: preparando docroot vazio (pra / não cair no Apache default)..."
+mkdir -p /var/www/penelope/empty
+# Se você quiser que / retorne 404, remova a linha abaixo (não crie index.html)
+: > /var/www/penelope/empty/index.html
+chown -R www-data:www-data /var/www/penelope
 
 log "Apache: habilitando módulos necessários (proxy, headers, rewrite, ssl)..."
-a2enmod proxy proxy_http headers rewrite ssl
+a2enmod proxy proxy_http headers rewrite ssl >/dev/null 2>&1 || true
+
+log "Apache: desabilitando sites default (HTTP + SSL)..."
 a2dissite 000-default.conf >/dev/null 2>&1 || true
+a2dissite default-ssl.conf  >/dev/null 2>&1 || true
+
+systemctl reload apache2 || true
 
 log "Criando VirtualHost para ${DOMAIN}..."
 TPL_DIR="${SCRIPT_DIR}/../templates"
@@ -162,19 +193,21 @@ render_tpl "${TPL_DIR}/apache-vhost.conf.tpl" "/etc/apache2/sites-available/${DO
   API_PORT="${API_PORT}" \
   ADMIN_PORT="${ADMIN_PORT}"
 
-a2ensite "${DOMAIN}.conf"
+a2ensite "${DOMAIN}.conf" >/dev/null
 apache2ctl configtest
 systemctl reload apache2
 
 log "Criando systemd services (api + admin placeholder)..."
 render_tpl "${TPL_DIR}/systemd-penelope-api.service.tpl" "/etc/systemd/system/penelope-api.service" \
   APP_USER="${APP_USER}" \
+  APP_GROUP="${APP_GROUP}" \
   API_DIR="${API_DIR}" \
   API_ENV="${API_ENV}" \
   GO_BIN="/usr/local/go/bin/go"
 
 render_tpl "${TPL_DIR}/systemd-penelope-admin.service.tpl" "/etc/systemd/system/penelope-admin.service" \
   APP_USER="${APP_USER}" \
+  APP_GROUP="${APP_GROUP}" \
   ADMIN_DIR="${ADMIN_DIR}" \
   ADMIN_PORT="${ADMIN_PORT}"
 
@@ -183,5 +216,5 @@ systemctl enable penelope-api.service penelope-admin.service
 
 log "Bootstrap concluído."
 log "Próximos passos:"
-log "  1) Deploy da API: rode remote/01-deploy-api.sh (ou pelo script local penelope-up.sh)"
-log "  2) Certbot: rode remote/02-certbot.sh quando o DNS já estiver apontando"
+log "  1) Deploy da API: rode remote/01-deploy-api.sh"
+log "  2) Certbot: rode remote/02-certbot.sh"

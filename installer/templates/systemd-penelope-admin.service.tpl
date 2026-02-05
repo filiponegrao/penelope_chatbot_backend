@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User={{APP_USER}}
-Group={{APP_USER}}
+Group={{APP_GROUP}}
 WorkingDirectory={{ADMIN_DIR}}
 # Placeholder: serve uma pasta estática /opt/penelope/admin/public em {{ADMIN_PORT}}
 ExecStart=/usr/bin/python3 -m http.server {{ADMIN_PORT}}
@@ -18,7 +18,7 @@ StandardError=append:/var/log/penelope/admin.err.log
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/var/log/penelope {{ADMIN_DIR}}
 
 [Install]

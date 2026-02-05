@@ -1,0 +1,41 @@
+{
+  "installer": {
+    "repo_https": "https://github.com/filiponegrao/penelope_chatbot_backend.git",
+    "repo_ssh": "git@github.com:filiponegrao/penelope_chatbot_backend.git",
+    "domain": "penelope.seu-dominio.com.br",
+    "admin_email": "seu-email@dominio.com",
+    "branch": "main",
+    "go_version": "1.22.5"
+  },
+  "db": {
+    "database": "postgres",
+    "host": "127.0.0.1",
+    "port": "5432",
+    "name": "penelope",
+    "user": "penelope",
+    "pass": "SUA_SENHA_FORTE_AQUI"
+  },
+  "runtime": {
+    "port": "5000",
+    "automigrate": "1",
+    "whatsapp": {
+      "verify_token": "SEU_VERIFY_TOKEN",
+      "phone_number_id": "SEU_PHONE_NUMBER_ID",
+      "access_token": "SEU_WHATSAPP_ACCESS_TOKEN"
+    },
+    "openai": {
+      "api_key": "SUA_OPENAI_API_KEY",
+      "model": "gpt-4.1-mini",
+      "system_prompt": "Você é a Penélope, um chatbot útil, educado e direto. Responda em português do Brasil."
+    },
+    "security": {
+      "jwt_secret": "SEGREDO_JWT_BEM_FORTE",
+      "activation_code_len": 6,
+      "refresh_code_len": 32,
+      "refresh_code_max_valid_days": 30
+    },
+    "installer": {
+      "github_token": "KEY"
+    }
+  }
+}

@@ -66,6 +66,7 @@ func Connect() (*gorm.DB, error) {
 			&models.UserInput{},
 			&models.Event{},
 			&models.UserPlan{},
+			&models.WhatsAppConfig{},
 		)
 	}
 
