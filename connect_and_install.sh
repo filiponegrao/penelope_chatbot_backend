@@ -6,6 +6,7 @@ set -euo pipefail
 #  1) envia o config.install.json para o servidor (/etc/penelope/config.json)
 #  2) clona/atualiza o repo no servidor
 #  3) executa installer/install.sh no servidor (gera runtime.config.json + api.env e instala tudo)
+#  4) garante que /policy e /terms funcionem no Apache (HTTP + HTTPS), independente do Certbot
 
 # ===== Pré-requisitos locais =====
 command -v jq >/dev/null 2>&1 || { echo "Erro: jq não encontrado (instale via brew/apt)."; exit 1; }
@@ -35,25 +36,25 @@ ssh "root@${HOST}" "
   mkdir -p /opt/penelope
 
   # Se o diretório já existe e não é do root, rodar Git como o dono do diretório
-  # para evitar erro de "dubious ownership".
+  # para evitar erro de \"dubious ownership\".
   REPO_OWNER=root
   if [ -d '${REMOTE_DIR}' ]; then
     REPO_OWNER=\$(stat -c '%U' '${REMOTE_DIR}' 2>/dev/null || echo root)
   fi
 
   git_as_owner() {
-    if [ "\$REPO_OWNER" = "root" ]; then
-      "\$@"
+    if [ \"\$REPO_OWNER\" = \"root\" ]; then
+      \"\$@\"
     else
-      sudo -H -u "\$REPO_OWNER" "\$@"
+      sudo -H -u \"\$REPO_OWNER\" \"\$@\"
     fi
   }
 
   if [ ! -d '${REMOTE_DIR}/.git' ]; then
     REPO_HTTPS=\$(jq -r '.installer.repo_https' '${REMOTE_CONFIG}')
-    [ -n "\$REPO_HTTPS" ] && [ "\$REPO_HTTPS" != "null" ] || { echo 'Erro: .installer.repo_https vazio no JSON'; exit 1; }
+    [ -n \"\$REPO_HTTPS\" ] && [ \"\$REPO_HTTPS\" != \"null\" ] || { echo 'Erro: .installer.repo_https vazio no JSON'; exit 1; }
     # clone como root, depois o usuário do serviço assume no install/bootstrap.
-    git clone "\$REPO_HTTPS" '${REMOTE_DIR}'
+    git clone \"\$REPO_HTTPS\" '${REMOTE_DIR}'
   fi
 
   cd '${REMOTE_DIR}'
@@ -61,12 +62,12 @@ ssh "root@${HOST}" "
   git config --global --add safe.directory '${REMOTE_DIR}' >/dev/null 2>&1 || true
 
   BRANCH=\$(jq -r '.installer.branch' '${REMOTE_CONFIG}')
-  [ -n "\$BRANCH" ] && [ "\$BRANCH" != "null" ] || { echo 'Erro: .installer.branch vazio no JSON'; exit 1; }
+  [ -n \"\$BRANCH\" ] && [ \"\$BRANCH\" != \"null\" ] || { echo 'Erro: .installer.branch vazio no JSON'; exit 1; }
 
   # Atualização idempotente e tolerante a force-push:
-  git_as_owner git -C '${REMOTE_DIR}' fetch origin "\$BRANCH" --prune
-  git_as_owner git -C '${REMOTE_DIR}' checkout "\$BRANCH" 2>/dev/null || git_as_owner git -C '${REMOTE_DIR}' checkout -b "\$BRANCH" "origin/\$BRANCH"
-  git_as_owner git -C '${REMOTE_DIR}' reset --hard "origin/\$BRANCH"
+  git_as_owner git -C '${REMOTE_DIR}' fetch origin \"\$BRANCH\" --prune
+  git_as_owner git -C '${REMOTE_DIR}' checkout \"\$BRANCH\" 2>/dev/null || git_as_owner git -C '${REMOTE_DIR}' checkout -b \"\$BRANCH\" \"origin/\$BRANCH\"
+  git_as_owner git -C '${REMOTE_DIR}' reset --hard \"origin/\$BRANCH\"
   git_as_owner git -C '${REMOTE_DIR}' clean -fd
 "
 
@@ -89,5 +90,38 @@ ssh "root@${HOST}" "
 
 echo ">> Instalando (bootstrap + deploy + certbot)..."
 ssh "root@${HOST}" "bash '${REMOTE_DIR}/installer/install.sh' --config '${REMOTE_CONFIG}' --all"
+
+echo ">> Garantindo rotas /policy e /terms no Apache (HTTP + HTTPS)..."
+ssh "root@${HOST}" "
+  set -euo pipefail
+
+  if ! command -v apache2ctl >/dev/null 2>&1; then
+    echo '>> Apache não encontrado ainda; pulando configuração de /policy e /terms.'
+    exit 0
+  fi
+
+  # garante que a pasta de estáticos existe (os arquivos devem ser criados pelo installer)
+  mkdir -p /var/www/penelope/empty
+
+  # cria/atualiza conf global (não depende dos vhosts do Certbot)
+  cat >/etc/apache2/conf-available/penelope-static.conf <<'EOF'
+Alias /policy     /var/www/penelope/empty/policy.html
+Alias /terms      /var/www/penelope/empty/terms.html
+Alias /policy.pdf /var/www/penelope/empty/policy.html
+Alias /terms.pdf  /var/www/penelope/empty/terms.html
+
+<Directory \"/var/www/penelope/empty\">
+  Require all granted
+  Options -Indexes
+  AllowOverride None
+</Directory>
+EOF
+
+  a2enconf penelope-static >/dev/null 2>&1 || true
+  apache2ctl configtest
+  systemctl reload apache2
+
+  echo '>> OK: aliases /policy e /terms configurados.'
+"
 
 echo ">> OK"
