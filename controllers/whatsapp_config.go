@@ -9,11 +9,12 @@ import (
 	"penelope/models"
 	"penelope/tools"
 
-	"github.com/jinzhu/gorm"
 	"github.com/gin-gonic/gin"
+	"github.com/jinzhu/gorm"
 )
 
 type upsertWhatsAppConfigReq struct {
+	WabaID        string `json:"waba_id"`
 	PhoneNumberID string `json:"phone_number_id"`
 	AccessToken   string `json:"access_token"`
 	ApiVersion    string `json:"api_version"`
@@ -36,6 +37,7 @@ func UpsertWhatsAppConfig(c *gin.Context) {
 	}
 
 	req.PhoneNumberID = strings.TrimSpace(req.PhoneNumberID)
+	req.WabaID = strings.TrimSpace(req.WabaID)
 	req.AccessToken = strings.TrimSpace(req.AccessToken)
 	req.ApiVersion = strings.TrimSpace(req.ApiVersion)
 	if req.ApiVersion == "" {
@@ -63,6 +65,7 @@ func UpsertWhatsAppConfig(c *gin.Context) {
 		if gorm.IsRecordNotFoundError(err) {
 			wa = models.WhatsAppConfig{
 				UserID:        user.ID,
+				WabaID:        req.WabaID,
 				PhoneNumberID: req.PhoneNumberID,
 				AccessToken:   req.AccessToken,
 				ApiVersion:    req.ApiVersion,
@@ -88,10 +91,11 @@ func UpsertWhatsAppConfig(c *gin.Context) {
 	if err := db.Model(&models.WhatsAppConfig{}).
 		Where("id = ?", wa.ID).
 		Updates(map[string]any{
+			"waba_id":         req.WabaID,
 			"phone_number_id": req.PhoneNumberID,
 			"access_token":    req.AccessToken,
-			"api_version":      req.ApiVersion,
-			"status":           status,
+			"api_version":     req.ApiVersion,
+			"status":          status,
 		}).Error; err != nil {
 		RespondError(c, err.Error(), http.StatusBadRequest)
 		return
@@ -133,6 +137,33 @@ func WhatsAppRequestCode(c *gin.Context) {
 	ctx := c.Request.Context()
 	client := tools.WhatsAppClient{AccessToken: wa.AccessToken, ApiVersion: wa.ApiVersion, PhoneNumberID: wa.PhoneNumberID}
 	if err := client.RequestCode(ctx, strings.TrimSpace(req.CodeMethod), strings.TrimSpace(req.Language)); err != nil {
+		// Special case: the phone is already verified at Meta side.
+		// In this scenario, we should auto-confirm the number in our DB.
+		if apiErr, ok := err.(tools.WhatsAppAPIError); ok {
+			if p, ok := tools.ParseGraphError(apiErr.Body); ok {
+				alreadyVerified := strings.Contains(strings.ToLower(p.Error.ErrorUserTitle), "already verified") ||
+					strings.Contains(strings.ToLower(p.Error.ErrorUserMsg), "already verified") ||
+					p.Error.ErrorSubcode == 2388366
+				if alreadyVerified {
+					// Subscribe this WABA to the app (required for production webhooks).
+					if strings.TrimSpace(wa.WabaID) != "" {
+						wabaClient := tools.WabaClient{AccessToken: wa.AccessToken, ApiVersion: wa.ApiVersion, WabaID: wa.WabaID}
+						if err := wabaClient.SubscribeApp(ctx); err != nil {
+							RespondError(c, err.Error(), http.StatusBadRequest)
+							return
+						}
+					}
+
+					now := time.Now()
+					_ = db.Model(&models.WhatsAppConfig{}).Where("id = ?", wa.ID).Updates(map[string]any{
+						"status":     models.WHATSAPP_STATUS_REGISTERED,
+						"updated_at": &now,
+					}).Error
+					RespondSuccess(c, true)
+					return
+				}
+			}
+		}
 		RespondError(c, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -184,11 +215,20 @@ func WhatsAppRegister(c *gin.Context) {
 		return
 	}
 
+	// Subscribe this WABA to the app (required for receiving webhook updates in production).
+	if strings.TrimSpace(wa.WabaID) != "" {
+		wabaClient := tools.WabaClient{AccessToken: wa.AccessToken, ApiVersion: wa.ApiVersion, WabaID: wa.WabaID}
+		if err := wabaClient.SubscribeApp(ctx); err != nil {
+			RespondError(c, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	// mark as registered
 	now := time.Now()
 	_ = db.Model(&models.WhatsAppConfig{}).Where("id = ?", wa.ID).Updates(map[string]any{
-		"status":      models.WHATSAPP_STATUS_REGISTERED,
-		"updated_at":  &now,
+		"status":     models.WHATSAPP_STATUS_REGISTERED,
+		"updated_at": &now,
 	}).Error
 
 	RespondSuccess(c, true)

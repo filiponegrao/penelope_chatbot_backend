@@ -18,6 +18,41 @@ type WhatsAppClient struct {
 	PhoneNumberID string
 }
 
+// WhatsAppAPIError represents a non-2xx response from the Graph API.
+// Body contains the raw JSON returned by Meta.
+type WhatsAppAPIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e WhatsAppAPIError) Error() string {
+	return fmt.Sprintf("whatsapp api error: status=%d body=%s", e.StatusCode, e.Body)
+}
+
+// graphErrorPayload is a minimal subset of Graph API error responses.
+type graphErrorPayload struct {
+	Error struct {
+		Message        string `json:"message"`
+		Type           string `json:"type"`
+		Code           int    `json:"code"`
+		ErrorSubcode   int    `json:"error_subcode"`
+		ErrorUserTitle string `json:"error_user_title"`
+		ErrorUserMsg   string `json:"error_user_msg"`
+	} `json:"error"`
+}
+
+// ParseGraphError attempts to parse Meta Graph error JSON.
+func ParseGraphError(raw string) (graphErrorPayload, bool) {
+	var p graphErrorPayload
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return graphErrorPayload{}, false
+	}
+	if p.Error.Message == "" && p.Error.ErrorUserTitle == "" && p.Error.ErrorUserMsg == "" && p.Error.Code == 0 {
+		return graphErrorPayload{}, false
+	}
+	return p, true
+}
+
 func (c WhatsAppClient) post(ctx context.Context, path string, body any) error {
 	apiVersion := strings.TrimSpace(c.ApiVersion)
 	if apiVersion == "" {
@@ -42,7 +77,7 @@ func (c WhatsAppClient) post(ctx context.Context, path string, body any) error {
 
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("whatsapp api error: status=%d body=%s", resp.StatusCode, string(raw))
+		return WhatsAppAPIError{StatusCode: resp.StatusCode, Body: string(raw)}
 	}
 	return nil
 }

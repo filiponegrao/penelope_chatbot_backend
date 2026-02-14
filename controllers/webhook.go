@@ -107,23 +107,6 @@ func requireActiveUserByID(c *gin.Context, db *gorm.DB, userID int64) (*models.U
 
 // GET /webhook e GET /webhook/:userId
 func WebhookVerify(c *gin.Context) {
-	userID, err := resolveWebhookUserID(c)
-	if err != nil {
-		RespondError(c, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	db := dbpkg.DBInstance(c)
-	if db == nil {
-		RespondError(c, "db não configurado no contexto", http.StatusInternalServerError)
-		return
-	}
-
-	_, ok := requireActiveUserByID(c, db, userID)
-	if !ok {
-		return
-	}
-
 	verifyToken := os.Getenv("WEBHOOK_VERIFY_TOKEN")
 	if verifyToken == "" {
 		RespondError(c, "WEBHOOK_VERIFY_TOKEN not set", http.StatusInternalServerError)
@@ -134,7 +117,11 @@ func WebhookVerify(c *gin.Context) {
 	token := c.Query("hub.verify_token")
 	challenge := c.Query("hub.challenge")
 
-	if mode == "subscribe" && token == verifyToken {
+	// Log útil pra debugar painel
+	fmt.Printf("[WA][VERIFY] path=%s mode=%s token_ok=%v challenge=%s\n",
+		c.FullPath(), mode, token == verifyToken, challenge)
+
+	if mode == "subscribe" && token == verifyToken && challenge != "" {
 		c.String(http.StatusOK, "%s", challenge)
 		return
 	}
