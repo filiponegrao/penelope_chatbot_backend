@@ -95,6 +95,7 @@ func Initialize(r *gin.Engine, cfg config.Configuration) {
 
 	// Modules CRUD (admin)
 	admin.GET("/modules", Logger(), controllers.GetModules)
+	admin.GET("/modules/input", Logger(), controllers.GetModulesInput)
 	admin.GET("/modules/:id", Logger(), controllers.GetModuleByID)
 	admin.POST("/modules", Logger(), controllers.CreateModule)
 	admin.PUT("/modules/:id", Logger(), controllers.UpdateModule)
