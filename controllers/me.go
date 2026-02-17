@@ -13,5 +13,5 @@ func Me(c *gin.Context) {
 		return
 	}
 	user.Password = ""
-	c.JSON(http.StatusOK, gin.H{"user": user})
+	c.JSON(http.StatusOK, user)
 }
