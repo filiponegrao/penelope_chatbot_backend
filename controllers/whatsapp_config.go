@@ -233,3 +233,33 @@ func WhatsAppRegister(c *gin.Context) {
 
 	RespondSuccess(c, true)
 }
+
+// GET /api/whatsapp/config (validated)
+// Returns the current WhatsAppConfig for the logged user.
+// If not configured yet, returns null (HTTP 200) so the UI can handle gracefully.
+func GetWhatsAppConfig(c *gin.Context) {
+	user, ok := GetUserLogged(c)
+	if !ok {
+		RespondError(c, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	db := dbpkg.DBInstance(c)
+	if db == nil {
+		RespondError(c, "db não configurado no contexto", http.StatusInternalServerError)
+		return
+	}
+
+	var wa models.WhatsAppConfig
+	err := db.Where("user_id = ?", user.ID).First(&wa).Error
+	if err != nil {
+		if gorm.IsRecordNotFoundError(err) {
+			RespondSuccess(c, nil)
+			return
+		}
+		RespondError(c, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	RespondSuccess(c, wa)
+}
