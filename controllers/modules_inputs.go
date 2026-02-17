@@ -11,8 +11,9 @@ import (
 )
 
 // GET /api/modules/input (admin)
-// Retorna todos os módulos com seus respectivos inputs vinculados (N:N via module_inputs).
-// Opcional: ?module_id=123 para filtrar por um módulo específico.
+// Filtros opcionais:
+// ?module_id=1
+// ?key=triage
 func GetModulesInput(c *gin.Context) {
 	db := dbpkg.DBInstance(c)
 	if db == nil {
@@ -20,12 +21,14 @@ func GetModulesInput(c *gin.Context) {
 		return
 	}
 
-	// optional filter
+	// optional filters
 	var (
 		moduleID    int64
 		hasModuleID bool
+		key         string
 	)
 
+	// filtro por id
 	if v := c.Query("module_id"); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {
@@ -36,10 +39,16 @@ func GetModulesInput(c *gin.Context) {
 		hasModuleID = true
 	}
 
+	// filtro por key
+	key = c.Query("key")
+
 	// Fetch modules
 	var modules []models.Module
 	q := db.Order("id asc")
-	if hasModuleID {
+
+	if key != "" {
+		q = q.Where("key = ?", key)
+	} else if hasModuleID {
 		q = q.Where("id = ?", moduleID)
 	}
 
@@ -49,11 +58,11 @@ func GetModulesInput(c *gin.Context) {
 	}
 
 	if len(modules) == 0 {
-		RespondSuccess(c, gin.H{"modules": []any{}})
+		RespondSuccess(c, []any{})
 		return
 	}
 
-	// Fetch inputs linked to modules (single query)
+	// Fetch inputs linked to modules
 	type row struct {
 		ModuleID int64 `gorm:"column:module_id"`
 		models.Input
@@ -74,7 +83,10 @@ func GetModulesInput(c *gin.Context) {
 		Joins("join inputs on inputs.id = module_inputs.input_id").
 		Order("module_inputs.module_id asc, inputs.id asc")
 
-	if hasModuleID {
+	if key != "" {
+		join = join.Joins("join modules on modules.id = module_inputs.module_id").
+			Where("modules.key = ?", key)
+	} else if hasModuleID {
 		join = join.Where("module_inputs.module_id = ?", moduleID)
 	}
 
@@ -88,13 +100,13 @@ func GetModulesInput(c *gin.Context) {
 		inputsByModule[r.ModuleID] = append(inputsByModule[r.ModuleID], r.Input)
 	}
 
-	// Build response: modules[] each with inputs[]
 	type ModuleWithInputs struct {
 		models.Module
 		Inputs []models.Input `json:"inputs"`
 	}
 
 	out := make([]ModuleWithInputs, 0, len(modules))
+
 	for _, m := range modules {
 		out = append(out, ModuleWithInputs{
 			Module: m,
