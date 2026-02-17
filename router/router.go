@@ -32,6 +32,10 @@ func Initialize(r *gin.Engine, cfg config.Configuration) {
 	api.POST("/login", Logger(), controllers.Login)
 	api.POST("/refresh", Logger(), controllers.Refresh)
 
+	api.POST("/password/forgot", Logger(), controllers.ForgotPasswordSendCode)
+	api.POST("/password/reset", Logger(), controllers.ResetPassword)
+	api.POST("/password/check-token", Logger(), controllers.CheckResetToken)
+
 	// Authenticated routes (token required)
 	auth := api.Group("")
 	auth.Use(controllers.AuthRequired())
@@ -51,6 +55,7 @@ func Initialize(r *gin.Engine, cfg config.Configuration) {
 
 	// Example protected endpoint (useful for smoke tests)
 	validated.GET("/me", Logger(), controllers.Me)
+	validated.PUT("/user", Logger(), controllers.UpdateCurrentUser)
 
 	// Plans (user)
 	validated.GET("/plans/user", Logger(), controllers.GetUserPlans)
