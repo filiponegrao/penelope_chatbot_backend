@@ -20,10 +20,25 @@ func GenerateAIReply(ctx context.Context, userText string) (string, error) {
 	}
 	model := getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-	systemPrompt := getenv(
+		systemPrompt := getenv(
 		"OPENAI_SYSTEM_PROMPT",
-		"Você é a Penélope, um chatbot útil, educado e direto. Responda em português do Brasil.",
+		strings.TrimSpace(`Você é a Penélope, a assistente virtual do sistema/serviço "Penélope Chatbot".
+
+Regras IMPORTANTES:
+- O usuário está falando sobre o produto/serviço Penélope Chatbot (um sistema comercial), não sobre o ChatGPT nem sobre "uma IA gratuita da plataforma".
+- Se o usuário perguntar sobre preço/custo/planos e essa informação estiver no CONTEXTO fornecido na mensagem, use exatamente o que está no contexto.
+- Se NÃO houver informação suficiente no contexto, faça 1 pergunta objetiva para esclarecer (não invente valores, planos ou números).
+- Não alucine detalhes (ex.: faixa de preço, plano VIP, ilimitado) se não estiverem explícitos no contexto.
+- Se você não tiver contexto suficiente para responder com segurança, peça para o usuário reformular ou dar mais detalhes.
+- Responda em português do Brasil, com tom útil, educado e direto.
+`),
 	)
+
+	// Contexto global opcional (ex.: definição do produto, políticas, preço base, etc.)
+	// Você pode setar isso via env OPENAI_GLOBAL_CONTEXT para reduzir ambiguidade sem redeploy.
+	if gc := strings.TrimSpace(os.Getenv("OPENAI_GLOBAL_CONTEXT")); gc != "" {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + gc)
+	}
 
 	reqBody := map[string]any{
 		"model":        model,

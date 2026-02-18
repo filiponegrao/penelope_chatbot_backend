@@ -17,6 +17,24 @@ import (
 	"github.com/jinzhu/gorm"
 )
 
+var (
+	chatHistoryWindowMin int
+	chatHistoryMaxEvents int
+)
+
+// Config obrigatório: se não estiver setado corretamente, o backend deve falhar rápido.
+// (Você pediu "all-in": sem fallback silencioso.)
+func init() {
+	chatHistoryWindowMin = mustEnvInt("CHAT_HISTORY_WINDOW_MIN")
+	chatHistoryMaxEvents = mustEnvInt("CHAT_HISTORY_MAX_EVENTS")
+	if chatHistoryWindowMin <= 0 || chatHistoryWindowMin > 24*60 {
+		log.Fatalf("CHAT_HISTORY_WINDOW_MIN inválido: %d (esperado 1..1440)", chatHistoryWindowMin)
+	}
+	if chatHistoryMaxEvents <= 0 || chatHistoryMaxEvents > 50 {
+		log.Fatalf("CHAT_HISTORY_MAX_EVENTS inválido: %d (esperado 1..50)", chatHistoryMaxEvents)
+	}
+}
+
 // StartEventProcessor starts a loop that processes pending events whose ScheduledAt <= now.
 func StartEventProcessor(db *gorm.DB) {
 	go func() {
@@ -72,6 +90,8 @@ func handleEvent(db *gorm.DB, eventID int64) {
 	//    Se falhar por qualquer motivo (ex.: embeddings off), seguimos sem contexto.
 	question := strings.TrimSpace(ev.Text)
 	enrichedText := question
+	var hadRagContext bool
+
 	if db != nil && question != "" && ev.UserID > 0 {
 		ctxText, err := buildUserInputContext(ctx, db, ev.UserID, question)
 		if err != nil {
@@ -80,51 +100,30 @@ func handleEvent(db *gorm.DB, eventID int64) {
 			}
 		} else if strings.TrimSpace(ctxText) != "" {
 			enrichedText = ctxText
+			hadRagContext = true
 		}
+	}
+
+	if db != nil && strings.TrimSpace(ev.Recipient) != "" && ev.UserID > 0 {
+		hist := buildConversationHistory(db, ev.UserID, ev.Recipient, ev.ID)
+		if strings.TrimSpace(hist) != "" {
+			enrichedText = strings.TrimSpace(hist + "\n\n" + enrichedText)
+		}
+	}
+
+	if !hadRagContext && looksBusinessSpecific(question) {
+		replyText := "Entendi em partes, consegue me explicar com um pouco mais de detalhe? :)"
+		finalizeEvent(db, &ev, replyText)
+		return
 	}
 
 	replyText, err := tools.GenerateAIReply(ctx, enrichedText)
 	if err != nil {
 		log.Printf("events worker: openai error: %v", err)
-		replyText = "Desculpe, tive um problema ao gerar a resposta."
+		replyText = "Hmmm, vou precisar confirmar aqui no sistema. Consegue voltar em 30 segundos?"
 	}
 
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("POC_NO_WHATSAPP")), "true") {
-		t := time.Now()
-		_ = db.Model(&models.Event{}).Where("id = ?", ev.ID).Updates(map[string]any{
-			"status":       models.EVENT_STATUS_DONE,
-			"processed_at": &t,
-			"reply_text":   replyText,
-		}).Error
-		return
-	}
-
-	if err := tools.SendWhatsAppText(ctx, ev.Recipient, replyText); err != nil {
-		log.Printf("events worker: send whatsapp error (legacy env): %v", err)
-	}
-
-	// Multi-tenant send (preferred): uses WhatsAppConfig for ev.UserID.
-	// If config is missing, we keep legacy env behavior above to avoid breaking older setups.
-	if db != nil {
-		var wa models.WhatsAppConfig
-		if err := db.Where("user_id = ?", ev.UserID).First(&wa).Error; err == nil {
-			waClient := tools.WhatsAppClient{
-				AccessToken:   wa.AccessToken,
-				ApiVersion:    wa.ApiVersion,
-				PhoneNumberID: wa.PhoneNumberID,
-			}
-			if err := waClient.SendText(ctx, ev.Recipient, replyText); err != nil {
-				log.Printf("events worker: send whatsapp error (tenant): %v", err)
-			}
-		}
-	}
-
-	t := time.Now()
-	_ = db.Model(&models.Event{}).Where("id = ?", ev.ID).Updates(map[string]any{
-		"status":       models.EVENT_STATUS_DONE,
-		"processed_at": &t,
-		"reply_text":   replyText,
-	}).Error
+	finalizeEvent(db, &ev, replyText)
 }
 
 type scoredUserInput struct {
@@ -178,7 +177,7 @@ func buildUserInputContext(ctx context.Context, db *gorm.DB, userID int64, quest
 
 	// Heurísticas simples: topK e threshold para evitar "contexto aleatório".
 	k := 4
-	threshold := 0.75
+	threshold := 0.70
 	if v := strings.TrimSpace(os.Getenv("RAG_TOP_K")); v != "" {
 		if n, err := atoiSafe(v); err == nil && n > 0 && n <= 20 {
 			k = n
@@ -233,6 +232,133 @@ func buildUserInputContext(ctx context.Context, db *gorm.DB, userID int64, quest
 	b.WriteString(question)
 
 	return b.String(), nil
+}
+
+func finalizeEvent(db *gorm.DB, ev *models.Event, replyText string) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("POC_NO_WHATSAPP")), "true") {
+		t := time.Now()
+		_ = db.Model(&models.Event{}).Where("id = ?", ev.ID).Updates(map[string]any{
+			"status":       models.EVENT_STATUS_DONE,
+			"processed_at": &t,
+			"reply_text":   replyText,
+		}).Error
+		return
+	}
+
+	// legacy env send
+	if err := tools.SendWhatsAppText(context.Background(), ev.Recipient, replyText); err != nil {
+		log.Printf("events worker: send whatsapp error (legacy env): %v", err)
+	}
+
+	// Multi-tenant send (preferred)
+	if db != nil {
+		var wa models.WhatsAppConfig
+		if err := db.Where("user_id = ?", ev.UserID).First(&wa).Error; err == nil {
+			waClient := tools.WhatsAppClient{
+				AccessToken:   wa.AccessToken,
+				ApiVersion:    wa.ApiVersion,
+				PhoneNumberID: wa.PhoneNumberID,
+			}
+			if err := waClient.SendText(context.Background(), ev.Recipient, replyText); err != nil {
+				log.Printf("events worker: send whatsapp error (tenant): %v", err)
+			}
+		}
+	}
+
+	t := time.Now()
+	_ = db.Model(&models.Event{}).Where("id = ?", ev.ID).Updates(map[string]any{
+		"status":       models.EVENT_STATUS_DONE,
+		"processed_at": &t,
+		"reply_text":   replyText,
+	}).Error
+}
+
+// buildConversationHistory monta um histórico curto (user/assistant) para dar continuidade.
+// Pega as últimas interações DONE do mesmo (user_id + recipient) dentro de um intervalo de tempo.
+func buildConversationHistory(db *gorm.DB, userID int64, recipient string, currentEventID int64) string {
+	since := time.Now().Add(-time.Duration(chatHistoryWindowMin) * time.Minute)
+
+	var events []models.Event
+	q := db.
+		Where("user_id = ? AND recipient = ?", userID, recipient).
+		Where("status = ?", models.EVENT_STATUS_DONE).
+		Where("processed_at IS NOT NULL AND processed_at >= ?", since).
+		Order("processed_at desc, id desc").
+		Limit(chatHistoryMaxEvents)
+
+	if currentEventID > 0 {
+		q = q.Where("id <> ?", currentEventID)
+	}
+
+	if err := q.Find(&events).Error; err != nil {
+		return ""
+	}
+	if len(events) == 0 {
+		return ""
+	}
+
+	// Está em ordem desc; invertendo para ficar cronológico.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+
+	var b strings.Builder
+	b.WriteString("Histórico recente desta conversa (WhatsApp):\n")
+	for _, e := range events {
+		ut := strings.TrimSpace(e.Text)
+		at := strings.TrimSpace(e.ReplyText)
+		if ut != "" {
+			b.WriteString("- Usuário: ")
+			b.WriteString(limitText(ut, 800))
+			b.WriteString("\n")
+		}
+		if at != "" {
+			b.WriteString("- Assistente: ")
+			b.WriteString(limitText(at, 800))
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func limitText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
+func looksBusinessSpecific(question string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	if q == "" {
+		return false
+	}
+	keywords := []string{
+		"penelope", "penélope", "chatbot", "plano", "planos", "bot", "chat bot",
+		"preço", "preco", "custo", "valor", "mensal", "mensalidade", "assinatura",
+	}
+	for _, k := range keywords {
+		if strings.Contains(q, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func mustEnvInt(key string) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		log.Fatalf("%s não definido no ambiente", key)
+	}
+	n, err := atoiSafe(v)
+	if err != nil {
+		log.Fatalf("%s inválido: %q", key, v)
+	}
+	return n
 }
 
 func parseEmbedding(s string) ([]float64, error) {
