@@ -102,6 +102,9 @@ DB_PASS="$(jget '.db.pass')"
 # =========================
 PORT="$(jget '.runtime.port')"
 AUTOMIGRATE="$(jget '.runtime.automigrate')"
+CHAT_HISTORY_WINDOW_MIN="$(jget '.runtime.CHAT_HISTORY_WINDOW_MIN')"
+CHAT_HISTORY_MAX_EVENTS="$(jget '.runtime.CHAT_HISTORY_MAX_EVENTS')
+
 
 WHATSAPP_VERIFY_TOKEN="$(jget '.runtime.whatsapp.verify_token')"
 WHATSAPP_PHONE_NUMBER_ID="$(jget '.runtime.whatsapp.phone_number_id')"
@@ -144,6 +147,10 @@ REFRESH_MAX_DAYS="${REFRESH_MAX_DAYS:-30}"
 [[ -n "${WHATSAPP_PHONE_NUMBER_ID}" ]] || die "Campo obrigatório ausente: .runtime.whatsapp.phone_number_id (no JSON)"
 [[ -n "${WHATSAPP_ACCESS_TOKEN}" ]] || die "Campo obrigatório ausente: .runtime.whatsapp.access_token (no JSON)"
 [[ -n "${OPENAI_API_KEY}" ]] || die "Campo obrigatório ausente: .runtime.openai.api_key (no JSON)"
+[[ -n "${CHAT_HISTORY_WINDOW_MIN}" ]] || die "Campo obrigatório ausente: .runtime.CHAT_HISTORY_WINDOW_MIN (no JSON)"
+[[ "${CHAT_HISTORY_WINDOW_MIN}" =~ ^[0-9]+$ ]] || die "Campo inválido: .runtime.CHAT_HISTORY_WINDOW_MIN deve ser número (minutos)"
+[[ -n "${CHAT_HISTORY_MAX_EVENTS}" ]] || die "Campo obrigatório ausente: .runtime.CHAT_HISTORY_MAX_EVENTS (no JSON)"
+[[ "${CHAT_HISTORY_MAX_EVENTS}" =~ ^[0-9]+$ ]] || die "Campo inválido: .runtime.CHAT_HISTORY_MAX_EVENTS deve ser número (quantidade)"
 
 # =========================
 # Generate files in /etc/penelope
@@ -211,6 +218,8 @@ chmod 640 "${RUNTIME_CONFIG}"
   echo "PORT=\"$(env_escape "${PORT}")\""
   echo "CONFIG_PATH=\"$(env_escape "${RUNTIME_CONFIG}")\""
   echo "AUTOMIGRATE=\"$(env_escape "${AUTOMIGRATE}")\""
+  echo "CHAT_HISTORY_WINDOW_MIN=\"$(env_escape "${CHAT_HISTORY_WINDOW_MIN}")\"" 
+  echo "CHAT_HISTORY_MAX_EVENTS=\"$(env_escape "${CHAT_HISTORY_MAX_EVENTS}")\""
   echo ""
   echo "# WhatsApp Cloud API"
   # IMPORTANTE:
