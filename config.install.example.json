@@ -36,6 +36,8 @@
     },
     "installer": {
       "github_token": "KEY"
-    }
+    },
+    "CHAT_HISTORY_WINDOW_MIN": "60",
+    "CHAT_HISTORY_MAX_EVENTS": "12",
   }
 }
