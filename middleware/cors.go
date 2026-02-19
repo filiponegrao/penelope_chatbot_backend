@@ -17,6 +17,8 @@ func CORSMiddleware() gin.HandlerFunc {
 	allowed := map[string]bool{
 		"https://penelope.filiponegrao.com.br":      true,
 		"https://test.penelope.filiponegrao.com.br": true,
+		// DEV
+		"http://localhost:5173": true,
 	}
 
 	return func(c *gin.Context) {
