@@ -110,6 +110,8 @@ CHAT_HISTORY_MAX_EVENTS="$(jget '.runtime.CHAT_HISTORY_MAX_EVENTS')"
 WHATSAPP_VERIFY_TOKEN="$(jget '.runtime.whatsapp.verify_token')"
 WHATSAPP_PHONE_NUMBER_ID="$(jget '.runtime.whatsapp.phone_number_id')"
 WHATSAPP_ACCESS_TOKEN="$(jget '.runtime.whatsapp.access_token')"
+WHATSAPP_APP_SECRET="$(jget '.runtime.whatsapp.whatsapp_app_secret')"
+WEBHOOKS_ROOT_CA_PEM="$(jget '.runtime.whatsapp.webhooks_root_ca_pem')"
 
 OPENAI_API_KEY="$(jget '.runtime.openai.api_key')"
 OPENAI_MODEL="$(jget '.runtime.openai.model')"
@@ -229,6 +231,8 @@ chmod 640 "${RUNTIME_CONFIG}"
   echo "WHATSAPP_VERIFY_TOKEN=\"$(env_escape "${WHATSAPP_VERIFY_TOKEN}")\""
   echo "WHATSAPP_PHONE_NUMBER_ID=\"$(env_escape "${WHATSAPP_PHONE_NUMBER_ID}")\""
   echo "WHATSAPP_ACCESS_TOKEN=\"$(env_escape "${WHATSAPP_ACCESS_TOKEN}")\""
+  echo "WHATSAPP_APP_SECRET=\"$(env_escape "${WHATSAPP_APP_SECRET}")\""
+  echo "WEBHOOK_APP_SECRET=\"$(env_escape "${WHATSAPP_APP_SECRET}")\""
   echo ""
   echo "# OpenAI"
   echo "OPENAI_API_KEY=\"$(env_escape "${OPENAI_API_KEY}")\""
@@ -242,6 +246,21 @@ chmod 640 "${RUNTIME_CONFIG}"
 # api.env deve ser root-only porque contém secrets
 chown root:root "${API_ENV}"
 chmod 600 "${API_ENV}"
+
+# 3) Meta Webhooks mTLS Root CA (optional but recommended)
+# If provided, we install it so Apache can verify Meta's client cert chain for /api/webhook.
+if [[ -n "${WEBHOOKS_ROOT_CA_PEM}" ]]; then
+  META_CA_PATH="/etc/ssl/certs/meta-webhooks-root-ca.pem"
+  umask 077
+  mkdir -p "$(dirname "${META_CA_PATH}")"
+  # The JSON usually stores \n; convert them to real newlines.
+  printf "%b" "${WEBHOOKS_ROOT_CA_PEM}" > "${META_CA_PATH}"
+  chown root:root "${META_CA_PATH}"
+  chmod 644 "${META_CA_PATH}"
+  log "Instalado Meta Webhooks Root CA em: ${META_CA_PATH}"
+else
+  log "WEBHOOKS_ROOT_CA_PEM vazio; mTLS do webhook não será habilitado automaticamente."
+fi
 
 log "Config carregada de: ${CONFIG_PATH}"
 log "Gerados:"

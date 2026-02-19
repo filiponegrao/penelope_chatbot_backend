@@ -19,6 +19,7 @@
     "port": "5000",
     "automigrate": "1",
     "whatsapp": {
+      "whatsapp_app_secret": "WHATSAPP_APP_SECRET",
       "verify_token": "SEU_VERIFY_TOKEN",
       "phone_number_id": "SEU_PHONE_NUMBER_ID",
       "access_token": "SEU_WHATSAPP_ACCESS_TOKEN"

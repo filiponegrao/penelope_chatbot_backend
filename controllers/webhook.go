@@ -1,6 +1,10 @@
 package controllers
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -84,6 +88,50 @@ func resolveWebhookUserID(c *gin.Context) (int64, error) {
 	return strconv.ParseInt(def, 10, 64)
 }
 
+// verifyMetaSignature validates the request body against Meta's signature header.
+//
+// WhatsApp/Graph Webhooks typically send: X-Hub-Signature-256: sha256=<hex>
+// The secret should be your Meta App Secret (NOT the WhatsApp access token).
+func verifyMetaSignature(c *gin.Context, rawBody []byte) (bool, string) {
+	// Prefer a dedicated env var for webhook signature secret.
+	// Keep multiple names for ops convenience.
+	secret := strings.TrimSpace(os.Getenv("WEBHOOK_APP_SECRET"))
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("WHATSAPP_APP_SECRET"))
+	}
+	if secret == "" {
+		secret = strings.TrimSpace(os.Getenv("META_APP_SECRET"))
+	}
+	if secret == "" {
+		return false, "missing WEBHOOK_APP_SECRET/WHATSAPP_APP_SECRET/META_APP_SECRET"
+	}
+
+	sig := strings.TrimSpace(c.GetHeader("X-Hub-Signature-256"))
+	if sig == "" {
+		// Some products also send X-Hub-Signature (sha1), but we enforce sha256.
+		return false, "missing X-Hub-Signature-256"
+	}
+	if !strings.HasPrefix(sig, "sha256=") {
+		return false, "invalid X-Hub-Signature-256 format"
+	}
+
+	providedHex := strings.TrimPrefix(sig, "sha256=")
+	provided, err := hex.DecodeString(providedHex)
+	if err != nil {
+		return false, "invalid signature hex"
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(rawBody)
+	expected := mac.Sum(nil)
+
+	if !hmac.Equal(provided, expected) {
+		return false, "signature mismatch"
+	}
+
+	return true, ""
+}
+
 func requireActiveUserByID(c *gin.Context, db *gorm.DB, userID int64) (*models.User, bool) {
 	if userID <= 0 {
 		RespondError(c, "user_id inválido", http.StatusBadRequest)
@@ -117,7 +165,6 @@ func WebhookVerify(c *gin.Context) {
 	token := c.Query("hub.verify_token")
 	challenge := c.Query("hub.challenge")
 
-	// Log útil pra debugar painel
 	fmt.Printf("[WA][VERIFY] path=%s mode=%s token_ok=%v challenge=%s\n",
 		c.FullPath(), mode, token == verifyToken, challenge)
 
@@ -148,8 +195,20 @@ func WebhookUpdate(c *gin.Context) {
 		return
 	}
 
+	// Read raw body once so we can validate Meta signature.
+	raw, err := c.GetRawData()
+	if err != nil {
+		RespondError(c, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	if ok, reason := verifyMetaSignature(c, raw); !ok {
+		RespondError(c, "forbidden: "+reason, http.StatusForbidden)
+		return
+	}
+
 	var payload WebhookPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := json.Unmarshal(raw, &payload); err != nil {
 		RespondError(c, "invalid json", http.StatusBadRequest)
 		return
 	}
