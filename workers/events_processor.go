@@ -174,10 +174,21 @@ func buildUserInputContext(ctx context.Context, db *gorm.DB, userID int64, quest
 	}
 
 	sort.Slice(scored, func(i, j int) bool { return scored[i].Score > scored[j].Score })
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("RAG_DEBUG")), "1") {
+		max := 3
+		if len(scored) < max {
+			max = len(scored)
+		}
+		for i := 0; i < max; i++ {
+			log.Printf("RAG debug: rank=%d user_input_id=%d score=%.4f", i+1, scored[i].Item.ID, scored[i].Score)
+		}
+	}
 
 	// Heurísticas simples: topK e threshold para evitar "contexto aleatório".
+	// Observação: perguntas curtas (ex.: "Quanto custa o produto?") tendem a ter score menor,
+	// então o threshold padrão precisa ser menos agressivo.
 	k := 4
-	threshold := 0.70
+	threshold := 0.55
 	if v := strings.TrimSpace(os.Getenv("RAG_TOP_K")); v != "" {
 		if n, err := atoiSafe(v); err == nil && n > 0 && n <= 20 {
 			k = n
@@ -196,6 +207,22 @@ func buildUserInputContext(ctx context.Context, db *gorm.DB, userID int64, quest
 		}
 		if s.Score >= threshold {
 			selected = append(selected, s)
+		}
+	}
+
+	// Fallback pequeno e seguro para perguntas de preço/custo:
+	// se nada passou no threshold, mas a pergunta é claramente de preço e o top item parece conter preço,
+	// incluímos o top1 (desde que tenha um score mínimo).
+	if len(selected) == 0 && len(scored) > 0 {
+		q := strings.ToLower(question)
+		isPriceQ := strings.Contains(q, "preço") || strings.Contains(q, "preco") || strings.Contains(q, "custo") || strings.Contains(q, "custa") || strings.Contains(q, "valor") || strings.Contains(q, "quanto")
+		if isPriceQ {
+			top := scored[0]
+			ctx := strings.ToLower(strings.TrimSpace(top.Item.Content))
+			looksPriceCtx := strings.Contains(ctx, "r$") || strings.Contains(ctx, "reais") || strings.Contains(ctx, "custo") || strings.Contains(ctx, "preço") || strings.Contains(ctx, "preco") || strings.Contains(ctx, "valor")
+			if looksPriceCtx && top.Score >= 0.40 {
+				selected = append(selected, top)
+			}
 		}
 	}
 
@@ -235,22 +262,9 @@ func buildUserInputContext(ctx context.Context, db *gorm.DB, userID int64, quest
 }
 
 func finalizeEvent(db *gorm.DB, ev *models.Event, replyText string) {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("POC_NO_WHATSAPP")), "true") {
-		t := time.Now()
-		_ = db.Model(&models.Event{}).Where("id = ?", ev.ID).Updates(map[string]any{
-			"status":       models.EVENT_STATUS_DONE,
-			"processed_at": &t,
-			"reply_text":   replyText,
-		}).Error
-		return
-	}
-
-	// legacy env send
-	if err := tools.SendWhatsAppText(context.Background(), ev.Recipient, replyText); err != nil {
-		log.Printf("events worker: send whatsapp error (legacy env): %v", err)
-	}
-
-	// Multi-tenant send (preferred)
+	// Envio WhatsApp:
+	// Preferir config multi-tenant (whats_app_configs). Se não existir, usar legacy env.
+	sent := false
 	if db != nil {
 		var wa models.WhatsAppConfig
 		if err := db.Where("user_id = ?", ev.UserID).First(&wa).Error; err == nil {
@@ -261,7 +275,14 @@ func finalizeEvent(db *gorm.DB, ev *models.Event, replyText string) {
 			}
 			if err := waClient.SendText(context.Background(), ev.Recipient, replyText); err != nil {
 				log.Printf("events worker: send whatsapp error (tenant): %v", err)
+			} else {
+				sent = true
 			}
+		}
+	}
+	if !sent {
+		if err := tools.SendWhatsAppText(context.Background(), ev.Recipient, replyText); err != nil {
+			log.Printf("events worker: send whatsapp error (legacy env): %v", err)
 		}
 	}
 
@@ -339,7 +360,7 @@ func looksBusinessSpecific(question string) bool {
 	}
 	keywords := []string{
 		"penelope", "penélope", "chatbot", "plano", "planos", "bot", "chat bot",
-		"preço", "preco", "custo", "valor", "mensal", "mensalidade", "assinatura",
+		"preço", "preco", "custo", "custa", "valor", "mensal", "mensalidade", "assinatura",
 	}
 	for _, k := range keywords {
 		if strings.Contains(q, k) {
