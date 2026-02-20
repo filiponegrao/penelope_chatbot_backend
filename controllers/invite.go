@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	dbpkg "penelope/db"
@@ -35,7 +37,7 @@ func CreateInvite(_ any, tx *gorm.DB, code string, user models.User, _ string) (
 // A ideia é igual ao Venditto (ResendInvite): procura o invite PENDING do usuário e troca o code.
 // Rota sugerida: POST /api/user/resend-code
 //
-// Obs: como ainda não tem envio por e-mail/SMS, devolvemos o activation_code no payload (para testes).
+// Obs: o código é enviado via WhatsApp (número oficial, via ENV do installer). Não retornamos o código no payload.
 func ResendActivationCode(c *gin.Context) {
 	user, ok := GetUserLogged(c)
 	if !ok {
@@ -68,8 +70,8 @@ func ResendActivationCode(c *gin.Context) {
 		return
 	}
 
-	// Gera novo código e renova expiração (mantive 24h igual seu CreateInvite)
-	newCode := tools.RandomString(6)
+	// Gera novo código (numérico) e renova expiração (mantive 24h igual seu CreateInvite)
+	newCode := tools.RandomNumbers(6)
 	exp := time.Now().Add(24 * time.Hour)
 
 	invite.Code = newCode
@@ -88,9 +90,19 @@ func ResendActivationCode(c *gin.Context) {
 		return
 	}
 
-	// Em produção: aqui seria envio por e-mail/SMS/WhatsApp.
-	RespondSuccess(c, gin.H{
-		"status":          "resent",
-		"activation_code": newCode, // <- para testes
-	})
+	// Envio do código via WhatsApp (número oficial do Penélope Chatbot, via ENV do installer).
+	toRaw := strings.TrimSpace(user.Phone1)
+	to, err := tools.NormalizeWhatsAppTo(toRaw)
+	if err != nil {
+		RespondError(c, "telefone do usuário inválido para WhatsApp", http.StatusBadRequest)
+		return
+	}
+
+	msg := fmt.Sprintf("Seu código Penélope é: %s", newCode)
+	if err := tools.SendWhatsAppText(c.Request.Context(), to, msg); err != nil {
+		RespondError(c, "falha ao enviar código via WhatsApp", http.StatusBadGateway)
+		return
+	}
+
+	RespondSuccess(c, gin.H{"status": "sent"})
 }

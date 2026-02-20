@@ -19,10 +19,11 @@
     "port": "5000",
     "automigrate": "1",
     "whatsapp": {
-      "whatsapp_app_secret": "WHATSAPP_APP_SECRET",
       "verify_token": "SEU_VERIFY_TOKEN",
       "phone_number_id": "SEU_PHONE_NUMBER_ID",
-      "access_token": "SEU_WHATSAPP_ACCESS_TOKEN"
+      "access_token": "SEU_WHATSAPP_ACCESS_TOKEN",
+      "whatsapp_app_secret": "WHATSAPP_APP_SECRET",
+      "webhooks_root_ca_pem": "-----BEGIN CERTIFICATE-----\nCn0KOQi8ifnEiMnMAxIGZW50OndhIiBQZW5lbG9wZSBBdGVuZGltZW50byBJbnRlbGlnZW50ZVCD+93MBhpA/a1xhqL3uGmsOBgGT3S5vb9Q4Q7ooXCLbUOG6TDlFzKgpgBBOkFVben6vnn0/kLTsda2HazSuGksK4AYDkvLCBIwbVNRr/rQn+P1WrO3na5sIJxa4e1ezPUvXk96lUE63F6fa7Q5Qh7XVZyZtYYYmCXK\n-----END CERTIFICATE-----"
     },
     "openai": {
       "api_key": "SUA_OPENAI_API_KEY",
