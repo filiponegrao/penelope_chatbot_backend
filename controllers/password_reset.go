@@ -2,7 +2,9 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -70,15 +72,47 @@ func ForgotPasswordSendCode(c *gin.Context) {
 	}
 
 	// Logística preparada pros 3 canais
-	msg := "Seu código de recuperação é: " + tokenText
+	msg := fmt.Sprintf("*Recuperação de senha* ✅\n\nCódigo para recuperação de senha:\n\n```%s```\n\n_Atenção: A equipe de suporte nunca vai pedir esse código pra você!_", tokenText)
 
 	switch channel {
 	case "whatsapp":
-		// best-effort; se não tiver credenciais ainda, não quebra o fluxo
-		to := strings.TrimSpace(user.Phone1)
-		if to != "" {
-			// _, _ = tools.SendWhatsAppText(requestCtx(c), to, msg)
-			log.Println(msg)
+		log.Printf("forgot password: whatsapp start user_id=%d phone1=%q env_phone_id=%q has_env_token=%t",
+			user.ID,
+			user.Phone1,
+			strings.TrimSpace(os.Getenv("WHATSAPP_PHONE_NUMBER_ID")),
+			strings.TrimSpace(os.Getenv("WHATSAPP_ACCESS_TOKEN")) != "",
+		)
+
+		// best-effort; anti-enumeração: nunca quebra o fluxo
+		toRaw := strings.TrimSpace(user.Phone1)
+		to, err := tools.NormalizeWhatsAppTo(toRaw)
+		if err != nil {
+			log.Printf("forgot password: invalid phone user_id=%d phone=%q err=%v", user.ID, toRaw, err)
+			RespondSuccess(c, true)
+			return
+		}
+
+		// 1) tenta credenciais globais (ENV)
+		if err := tools.SendWhatsAppText(requestCtx(c), to, msg); err == nil {
+			RespondSuccess(c, true)
+			return
+		} else {
+			log.Printf("forgot password: env whatsapp send failed user_id=%d to=%s err=%v", user.ID, to, err)
+		}
+
+		// 2) fallback: credenciais do próprio tenant
+		var cfg models.WhatsAppConfig
+		if err := db.Where("user_id = ?", user.ID).First(&cfg).Error; err == nil {
+			client := tools.WhatsAppClient{
+				AccessToken:   strings.TrimSpace(cfg.AccessToken),
+				PhoneNumberID: strings.TrimSpace(cfg.PhoneNumberID),
+				ApiVersion:    strings.TrimSpace(cfg.ApiVersion),
+			}
+			if err := client.SendText(requestCtx(c), to, msg); err != nil {
+				log.Printf("forgot password: tenant whatsapp send failed user_id=%d to=%s err=%v", user.ID, to, err)
+			}
+		} else {
+			log.Printf("forgot password: whatsapp_config not found user_id=%d err=%v", user.ID, err)
 		}
 	case "sms":
 		// TODO: integrar SMS (Twilio, Zenvia, etc.)

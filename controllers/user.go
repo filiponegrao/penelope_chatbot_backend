@@ -49,7 +49,8 @@ func CreateUser(c *gin.Context) {
 		RespondError(c, err.Error(), 400)
 		return
 	} else if exists {
-		RespondError(c, "Usuário já existe", 400)
+		// Anti enumeracao
+		RespondSuccess(c, "success")
 		return
 	}
 
@@ -100,5 +101,5 @@ func CreateUser(c *gin.Context) {
 		RespondSuccess(c, gin.H{"user": user, "activation_code": v})
 		return
 	}
-	RespondSuccess(c, user)
+	RespondSuccess(c, "success")
 }

@@ -71,6 +71,8 @@ func (user User) MissingFields() string {
 		return "password"
 	} else if tools.CheckPassword(user.Password) != "" {
 		return tools.CheckPassword(user.Password)
+	} else if user.Phone1 == "" {
+		return "phone1"
 	}
 	return ""
 }

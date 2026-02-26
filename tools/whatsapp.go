@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -23,7 +24,7 @@ func SendWhatsAppText(ctx context.Context, to string, text string) error {
 
 	client := WhatsAppClient{
 		AccessToken:   token,
-		ApiVersion:    "v20.0",
+		ApiVersion:    "v24.0",
 		PhoneNumberID: phoneID,
 	}
 	return client.SendText(ctx, to, text)
@@ -34,16 +35,27 @@ func (c WhatsAppClient) SendText(ctx context.Context, to string, text string) er
 	if strings.TrimSpace(c.AccessToken) == "" || strings.TrimSpace(c.PhoneNumberID) == "" {
 		return fmt.Errorf("whatsapp client missing access_token or phone_number_id")
 	}
+
+	// ✅ NORMALIZA O NÚMERO AQUI (remove +, espaços, máscara, etc.)
+	toNorm, err := NormalizeWhatsAppTo(to)
+	if err != nil {
+		return fmt.Errorf("invalid whatsapp 'to': %w", err)
+	}
+
 	apiVersion := strings.TrimSpace(c.ApiVersion)
 	if apiVersion == "" {
 		apiVersion = "v24.0"
 	}
 
-	url := fmt.Sprintf("https://graph.facebook.com/%s/%s/messages", apiVersion, strings.TrimSpace(c.PhoneNumberID))
+	url := fmt.Sprintf(
+		"https://graph.facebook.com/%s/%s/messages",
+		apiVersion,
+		strings.TrimSpace(c.PhoneNumberID),
+	)
 
 	reqBody := map[string]any{
 		"messaging_product": "whatsapp",
-		"to":                to,
+		"to":                toNorm,
 		"type":              "text",
 		"text": map[string]any{
 			"body": text,
@@ -56,19 +68,31 @@ func (c WhatsAppClient) SendText(ctx context.Context, to string, text string) er
 	if err != nil {
 		return err
 	}
+
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.AccessToken))
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 30 * time.Second}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	log.Printf(
+		"WHATSAPP SEND -> original_to=%s normalized_to=%s status=%d body=%s",
+		to,
+		toNorm,
+		resp.StatusCode,
+		string(bodyBytes),
+	)
+
 	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("whatsapp api error: status=%d body=%s", resp.StatusCode, string(body))
+		return fmt.Errorf("whatsapp api error: status=%d body=%s", resp.StatusCode, string(bodyBytes))
 	}
+
 	return nil
 }
