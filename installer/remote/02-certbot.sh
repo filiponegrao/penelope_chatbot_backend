@@ -17,8 +17,9 @@ log "  sudo systemctl status apache2"
 
 
 # === Webhook mTLS (Meta) ===
-# Se o arquivo de CA foi instalado, habilitamos a conf que exige client cert no /api/webhook.
-if [[ -f "/etc/ssl/certs/meta-webhooks-root-ca.pem" ]]; then
+# If the CA file is installed and valid, enable the conf that requires client cert on /api/webhook.
+META_CA="/etc/ssl/certs/meta-webhooks-root-ca.pem"
+if [[ -f "${META_CA}" ]] && openssl x509 -in "${META_CA}" -noout >/dev/null 2>&1; then
   log "Habilitando mTLS do webhook (Meta) via Apache conf..."
   cp -f "${SCRIPT_DIR}/../templates/apache-webhook-mtls.conf.tpl" /etc/apache2/conf-available/penelope-webhook-mtls.conf
   a2enmod ssl >/dev/null 2>&1 || true
@@ -27,5 +28,9 @@ if [[ -f "/etc/ssl/certs/meta-webhooks-root-ca.pem" ]]; then
   systemctl reload apache2
   log "mTLS do webhook habilitado: /api/webhook"
 else
-  log "Meta Root CA não encontrada (/etc/ssl/certs/meta-webhooks-root-ca.pem). Pulando mTLS do webhook."
+  if [[ -f "${META_CA}" ]]; then
+    log "Meta Root CA encontrada, mas inválida (não é X509 PEM). Pulando mTLS do webhook para não derrubar o Apache."
+  else
+    log "Meta Root CA não encontrada (${META_CA}). Pulando mTLS do webhook."
+  fi
 fi

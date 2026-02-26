@@ -248,18 +248,43 @@ chown root:root "${API_ENV}"
 chmod 600 "${API_ENV}"
 
 # 3) Meta Webhooks mTLS Root CA (optional but recommended)
-# If provided, we install it so Apache can verify Meta's client cert chain for /api/webhook.
-if [[ -n "${WEBHOOKS_ROOT_CA_PEM}" ]]; then
-  META_CA_PATH="/etc/ssl/certs/meta-webhooks-root-ca.pem"
+# Installed so Apache can verify Meta's client cert chain for /api/webhook.
+# Prefer the bundled asset (fixed across customers), but allow an override via JSON.
+META_CA_PATH="/etc/ssl/certs/meta-webhooks-root-ca.pem"
+BUNDLED_META_CA="${SCRIPT_DIR}/assets/meta-webhooks-root-ca.pem"
+
+install_meta_ca() {
   umask 077
   mkdir -p "$(dirname "${META_CA_PATH}")"
-  # The JSON usually stores \n; convert them to real newlines.
-  printf "%b" "${WEBHOOKS_ROOT_CA_PEM}" > "${META_CA_PATH}"
-  chown root:root "${META_CA_PATH}"
-  chmod 644 "${META_CA_PATH}"
-  log "Instalado Meta Webhooks Root CA em: ${META_CA_PATH}"
+  if [[ -f "${BUNDLED_META_CA}" ]]; then
+    # Bundled PEM (recommended): stable for all tenants; update only if Meta rotates the CA.
+    install -m 0644 "${BUNDLED_META_CA}" "${META_CA_PATH}"
+    log "Instalado Meta Webhooks Root CA (bundled) em: ${META_CA_PATH}"
+    return 0
+  fi
+
+  if [[ -n "${WEBHOOKS_ROOT_CA_PEM}" ]]; then
+    # JSON may store \n; convert them to real newlines.
+    printf "%b" "${WEBHOOKS_ROOT_CA_PEM}" > "${META_CA_PATH}"
+    chown root:root "${META_CA_PATH}"
+    chmod 644 "${META_CA_PATH}"
+    log "Instalado Meta Webhooks Root CA (from config) em: ${META_CA_PATH}"
+    return 0
+  fi
+
+  return 1
+}
+
+if install_meta_ca; then
+  # Validate PEM to avoid crashing Apache/mod_ssl.
+  if openssl x509 -in "${META_CA_PATH}" -noout >/dev/null 2>&1; then
+    : # OK
+  else
+    log "ERRO: Meta Root CA em ${META_CA_PATH} não é um X509 PEM válido. Removendo e desabilitando mTLS."
+    rm -f "${META_CA_PATH}" || true
+  fi
 else
-  log "WEBHOOKS_ROOT_CA_PEM vazio; mTLS do webhook não será habilitado automaticamente."
+  log "Meta Root CA não encontrada (bundled/config vazio); mTLS do webhook não será habilitado automaticamente."
 fi
 
 log "Config carregada de: ${CONFIG_PATH}"
